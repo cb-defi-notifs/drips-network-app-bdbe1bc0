@@ -2,6 +2,9 @@ import { COINMARKETCAP_API_KEY } from '$env/static/private';
 import { z } from 'zod';
 import mapFilterUndefined from '$lib/utils/map-filter-undefined';
 import type { RequestHandler } from './$types';
+import { redis } from '../../redis';
+import cached from '$lib/utils/cache/remote/cached';
+import { ensureResponseOk } from '$lib/utils/fetch';
 
 const cmcResponseSchema = z.object({
   data: z.array(
@@ -25,15 +28,19 @@ const COINMARKETCAP_ETHEREUM_PLATFORM_ID = 1;
 // TODO: Find some way to not fetch and send back the entire list of all tokens on CoinMarketCap,
 // but only the ones currently needed for estimates.
 
-export const GET: RequestHandler = async () => {
-  const idMapRes = await fetch(
-    `https://pro-api.coinmarketcap.com/v1/cryptocurrency/map?CMC_PRO_API_KEY=${COINMARKETCAP_API_KEY}`,
-  );
+export const GET: RequestHandler = async ({ fetch }) => {
+  const cmcIdMapRes = await cached(redis, 'cmc-id-map', 24 * 60 * 60, async () => {
+    const idMapRes = await ensureResponseOk(
+      fetch(
+        `https://pro-api.coinmarketcap.com/v1/cryptocurrency/map?CMC_PRO_API_KEY=${COINMARKETCAP_API_KEY}`,
+      ),
+    );
 
-  const parsed = cmcResponseSchema.parse(await idMapRes.json());
+    return cmcResponseSchema.parse(await idMapRes.json());
+  });
 
   const idMap = Object.fromEntries(
-    mapFilterUndefined(parsed.data, (tokenData) => {
+    mapFilterUndefined(cmcIdMapRes.data, (tokenData) => {
       // Don't include if platform is not Ethereum
       if (
         !tokenData.platform ||
@@ -53,6 +60,7 @@ export const GET: RequestHandler = async () => {
   return new Response(JSON.stringify(idMap), {
     headers: {
       'content-type': 'application/json',
+      'cache-control': 'public, max-age=43200',
     },
   });
 };

@@ -1,14 +1,29 @@
+@import 'tailwind.css';
+@import 'reset.css';
+@import 'global.css';
+@import 'colors.css';
+@import 'elevation.css';
+@import 'typography.css';
+
 html.smoothscroll {
   scroll-behavior: smooth;
 }
 
 body {
   -webkit-tap-highlight-color: transparent;
+  text-wrap: pretty;
 }
 
 * {
   transition: background-color 0.2s;
-  font-feature-settings: 'ss02', 'calt' 0;
+  font-feature-settings:
+    'ss02',
+    'calt' 0;
+}
+
+::selection {
+  background: var(--color-primary);
+  color: var(--color-background);
 }
 
 /* hide input[number] arrows */
@@ -60,6 +75,11 @@ h1,
   font-style: normal;
 }
 
+h3,
+.typo-header-3 {
+  font-family: var(--typeface-regular);
+}
+
 .tabular-nums {
   font-feature-settings: 'tnum', 'zero';
 }
@@ -68,4 +88,12 @@ h1,
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+}
+
+.twemoji-text .emoji {
+  display: inline-block;
+  height: 1em;
+  padding: 0 0.125rem;
+  margin-bottom: 0.1em;
+  vertical-align: middle;
 }

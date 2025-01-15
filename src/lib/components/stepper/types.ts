@@ -1,4 +1,67 @@
-import type { ComponentType, SvelteComponent, SvelteComponentTyped } from 'svelte';
+import type { SendTransactionsResponse } from '@safe-global/safe-apps-sdk';
+import type { TransactionLike } from 'ethers';
+import type { TransactionReceipt } from 'ethers';
+import type { ComponentType, SvelteComponent } from 'svelte';
+
+export type TransactionWrapper = {
+  title: string;
+  transaction: TransactionLike;
+  gasless?: boolean;
+  applyGasBuffer: boolean;
+};
+
+/**
+ * Use this to display transactions that are handled off-chain (e.g. through Gelato Relay) but have to be awaited
+ * as part of a multi-transaction interaction.
+ */
+export type ExternalTransaction = {
+  title: string;
+  external: true;
+  expectedDurationMs: number;
+  expectedDurationText: string;
+  /** When this resolves, moves on to next transaction */
+  promise: () => Promise<void>;
+};
+
+export type TransactionWrapperOrExternalTransaction = TransactionWrapper | ExternalTransaction;
+
+export interface TransactPayload<T> {
+  before?: T;
+  transactions: (
+    context: Context<T>,
+  ) =>
+    | TransactionWrapperOrExternalTransaction[]
+    | Promise<TransactionWrapperOrExternalTransaction[]>;
+  after?: (receipts: TransactionReceipt[], context: Context<T>) => PromiseLike<void>;
+  afterSafe?: (
+    sendTransactionsResponse: SendTransactionsResponse,
+    context: Context<T>,
+  ) => PromiseLike<void>;
+  headline: string;
+  description?: string;
+  icon?: {
+    component: ComponentType;
+    props?: Record<string, unknown>;
+  };
+  messages?: {
+    duringBefore?: string;
+    duringAfter?: string;
+  };
+}
+
+export type SomeTransactPayload = <R>(
+  payload: <T extends BeforeFunc | undefined>(transactPayload: TransactPayload<T>) => R,
+) => R;
+
+export type BeforeFunc = () => PromiseLike<Record<string, unknown> | void>;
+
+type Context<T> = T extends BeforeFunc ? Awaited<ReturnType<T>> : undefined;
+
+export function makeTransactPayload<T extends BeforeFunc | undefined>(
+  i: TransactPayload<T>,
+): SomeTransactPayload {
+  return (cb) => cb(i);
+}
 
 export interface UpdateAwaitStepParams {
   message?: string;
@@ -25,7 +88,7 @@ export interface AwaitPendingPayload extends UpdateAwaitStepParams {
 }
 
 export interface MovePayload {
-  by?: number;
+  by: number;
 }
 
 export interface SidestepPayload {
@@ -38,9 +101,9 @@ type Constructor<T> = new (...args: any[]) => T;
 
 export type StepComponentEvents = {
   /** Go forward one step (or a custom amount by setting `by`). */
-  goForward: MovePayload;
+  goForward: MovePayload | void;
   /** Go backward one step (or a custom amount by setting `by`). */
-  goBackward: MovePayload;
+  goBackward: MovePayload | void;
   /**
    * Await a promise while displaying a customizable spinner dialog.
    * Once the passed promise is resolved, advances in the flow. If
@@ -58,15 +121,18 @@ export type StepComponentEvents = {
    * Conclude a flow. Either goes back to the original flow if a sidestep
    * is currently active, or closes the stepper modal.
    */
-  conclude: undefined;
+  conclude: void;
+  // TODO: add description.
+  transact: SomeTransactPayload;
 };
 
 type OmitContext<T> = Omit<T, 'context'>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type Props<T> = T extends SvelteComponentTyped<infer P, any, any> ? OmitContext<P> : never;
+export type Props<T> = T extends SvelteComponent<infer P, any, any> ? OmitContext<P> : never;
 export type PropsOrUndefined<T> = Props<T> extends Record<string, never> ? undefined : Props<T>;
 
 export type Step<T extends SvelteComponent> = {
+  condition?: () => boolean;
   component: Constructor<T>;
   props: PropsOrUndefined<T>;
 };

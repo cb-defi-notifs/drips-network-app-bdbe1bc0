@@ -1,18 +1,74 @@
+<script lang="ts" context="module">
+  export const DELETE_STREAM_CONFIRM_STEP_STREAM_FRAGMENT = gql`
+    fragment DeleteStreamConfirmStep on Stream {
+      id
+    }
+  `;
+</script>
+
 <script lang="ts">
   import Button from '$lib/components/button/button.svelte';
   import StepHeader from '$lib/components/step-header/step-header.svelte';
   import StepLayout from '$lib/components/step-layout/step-layout.svelte';
-  import type { StepComponentEvents } from '$lib/components/stepper/types';
-  import type { Stream } from '$lib/stores/streams/types';
+  import { makeTransactPayload, type StepComponentEvents } from '$lib/components/stepper/types';
   import { createEventDispatcher } from 'svelte';
-  import deleteStream from './methods/delete-stream';
+  import walletStore from '$lib/stores/wallet/wallet.store';
+  import { buildStreamDeleteBatchTx } from '$lib/utils/streams/streams';
+  import { gql } from 'graphql-request';
+  import type { DeleteStreamConfirmStepFragment } from './__generated__/gql.generated';
+  import assert from '$lib/utils/assert';
+  import { waitForAccountMetadata } from '$lib/utils/ipfs';
+  import { goto } from '$app/navigation';
+  import { populateCallerWriteTx } from '$lib/utils/sdk/caller/caller';
+  import txToCallerCall from '$lib/utils/sdk/utils/tx-to-caller-call';
+  import SkullIcon from '$lib/components/icons/💀.svelte';
 
   const dispatch = createEventDispatcher<StepComponentEvents>();
 
-  export let stream: Stream;
+  export let stream: DeleteStreamConfirmStepFragment;
 
   function startDeleting() {
-    deleteStream(dispatch, stream);
+    dispatch(
+      'transact',
+      makeTransactPayload({
+        headline: 'Deleting stream',
+        icon: {
+          component: SkullIcon,
+          props: { size: 48 },
+        },
+        before: async () => {
+          const { signer } = $walletStore;
+          assert(signer);
+
+          const { batch, newHash } = await buildStreamDeleteBatchTx(signer, stream.id);
+
+          return {
+            batch,
+            newHash,
+          };
+        },
+
+        transactions: async ({ batch }) => [
+          {
+            transaction: await populateCallerWriteTx({
+              functionName: 'callBatched',
+              args: [batch.map(txToCallerCall)],
+            }),
+            applyGasBuffer: true,
+            title: 'Delete the stream',
+          },
+        ],
+
+        after: async (_, { newHash }) => {
+          const { dripsAccountId } = $walletStore;
+          assert(dripsAccountId);
+
+          await waitForAccountMetadata(dripsAccountId, newHash, 'address');
+
+          await goto('/funds');
+        },
+      }),
+    );
   }
 </script>
 

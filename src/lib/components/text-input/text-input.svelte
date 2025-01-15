@@ -1,16 +1,14 @@
 <!-- Adjusted from radicle-design-system's TextInput component -->
 <script lang="ts">
-  import type { TextInputValidationState } from 'radicle-design-system/TextInput';
+  import type { TextInputValidationState } from '$lib/components/text-input/text-input';
+  import CheckCircleIcon from '$lib/components/icons/CheckCircle.svelte';
+  import ExclamationCircleIcon from '$lib/components/icons/ExclamationCircle.svelte';
+  import KeyHint from '$lib/components/key-hint/KeyHint.svelte';
+  import Spinner from '$lib/components/spinner/spinner-radicle-system.svelte';
+  import { createEventDispatcher, type ComponentType, tick } from 'svelte';
+  import Cross from '$lib/components/icons/Cross.svelte';
 
-  import CheckCircleIcon from 'radicle-design-system/icons/CheckCircle.svelte';
-  import ExclamationCircleIcon from 'radicle-design-system/icons/ExclamationCircle.svelte';
-
-  import KeyHint from 'radicle-design-system/KeyHint.svelte';
-  import Spinner from 'radicle-design-system/Spinner.svelte';
-  import { createEventDispatcher, type ComponentType } from 'svelte';
-  import Cross from 'radicle-design-system/icons/Cross.svelte';
-
-  const dispatch = createEventDispatcher<{ clear: never }>();
+  const dispatch = createEventDispatcher<{ clear: void }>();
 
   export let variant: { type: 'text' } | { type: 'password' } | { type: 'number'; min: number } = {
     type: 'text',
@@ -37,6 +35,8 @@
   export let hint: string | undefined = undefined;
   export let suffix: string | undefined = undefined;
 
+  export let inputElement: HTMLInputElement | undefined = undefined;
+
   export let validationState: TextInputValidationState = {
     type: 'unvalidated',
   };
@@ -44,8 +44,6 @@
   export const focus = (): void => {
     inputElement && inputElement.focus();
   };
-
-  let inputElement: HTMLInputElement | undefined = undefined;
 
   // Canʼt use normal `autofocus` attribute on the `inputElement`: "Autofocus
   // processing was blocked because a document's URL has a fragment".
@@ -60,9 +58,12 @@
     inputElement.type = variant.type;
   }
 
-  function clear() {
+  async function clear() {
     value = '';
     dispatch('clear');
+    // wait a tick in case parent has some disabling logic (enter-git-url)
+    await tick();
+    return inputElement?.focus();
   }
 
   let rightContainerWidth: number;
@@ -82,6 +83,7 @@
     style:padding-left={icon ? '2.75rem' : 'auto'}
     class:invalid={validationState.type === 'invalid'}
     class:concealed={variant.type === 'password'}
+    class:tabular-nums={variant.type === 'number'}
     min={variant.type === 'number' ? variant.min : undefined}
     {placeholder}
     {disabled}
@@ -91,8 +93,10 @@
     on:change
     on:click
     on:input
+    on:focus
     on:keydown
     on:keypress
+    on:paste
     autocomplete={autocomplete ? 'on' : 'off'}
     {spellcheck}
     autocapitalize={autocapitalize ? 'on' : 'off'}
@@ -106,7 +110,7 @@
     {/if}
 
     {#if showClearButton}
-      <button style="color: var(--color-foreground); margin: 0 0.75rem;" on:click={clear}>
+      <button on:click={clear} on:keydown={clear} tabindex="-1">
         <Cross />
       </button>
     {/if}
@@ -121,11 +125,11 @@
     {/if}
 
     {#if validationState.type === 'pending'}
-      <Spinner style="margin: 0 0.75rem;" />
+      <Spinner />
     {:else if showSuccessCheck && validationState.type === 'valid'}
-      <CheckCircleIcon style="fill: var(--color-positive); margin: 0 0.5rem;" />
+      <CheckCircleIcon style="fill: var(--color-positive)" />
     {:else if validationState.type === 'invalid'}
-      <ExclamationCircleIcon style="fill: var(--color-negative); margin: 0 0.5rem;" />
+      <ExclamationCircleIcon style="fill: var(--color-negative);" />
     {/if}
   </div>
 
@@ -153,8 +157,14 @@
     height: 3rem;
     padding: 0.5rem 0.75rem;
     width: 100%;
-    transition: background-color 0.3s, box-shadow 0.3s;
-    font-feature-settings: 'ss01', 'ss02', 'cv01', 'calt' 0;
+    transition:
+      background-color 0.3s,
+      box-shadow 0.3s;
+    font-feature-settings:
+      'ss01',
+      'ss02',
+      'cv01',
+      'calt' 0;
   }
   input::placeholder {
     color: var(--color-foreground-level-4);
@@ -177,10 +187,12 @@
   .right-container {
     align-items: center;
     display: flex;
+    gap: 0.25rem;
     height: 3rem;
     position: absolute;
-    right: 0;
     top: 0;
+    right: 0;
+    padding: 0 0.75rem;
   }
 
   .concealed {

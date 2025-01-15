@@ -3,21 +3,27 @@
     ${PROJECT_AVATAR_FRAGMENT}
     ${PROJECT_NAME_FRAGMENT}
     fragment ProjectCard on Project {
-      ...ProjectAvatar
       ...ProjectName
-      ... on ClaimedProject {
-        source {
-          forge
-          ownerName
-          repoName
-        }
+      isVisible
+      source {
+        forge
+        ownerName
+        repoName
       }
-      ... on UnclaimedProject {
-        source {
-          forge
-          ownerName
-          repoName
+      chainData {
+        ... on ClaimedProjectData {
+          chain
+          owner {
+            accountId
+          }
         }
+        ... on UnClaimedProjectData {
+          chain
+          owner {
+            accountId
+          }
+        }
+        ...ProjectAvatar
       }
     }
   `;
@@ -25,27 +31,37 @@
 
 <script lang="ts">
   import buildProjectUrl from '$lib/utils/build-project-url';
-  import Github from 'radicle-design-system/icons/Github.svelte';
+  import Github from '$lib/components/icons/Github.svelte';
 
   import ProjectAvatar, { PROJECT_AVATAR_FRAGMENT } from '../project-avatar/project-avatar.svelte';
-  import ProjectName, { PROJECT_NAME_FRAGMENT } from '../project-badge/components/project-name.svelte';
+  import ProjectName, {
+    PROJECT_NAME_FRAGMENT,
+  } from '../project-badge/components/project-name.svelte';
   import { gql } from 'graphql-request';
   import type { ProjectCardFragment } from './__generated__/gql.generated';
   import isClaimed from '$lib/utils/project/is-claimed';
+  import filterCurrentChainData from '$lib/utils/filter-current-chain-data';
 
   export let project: ProjectCardFragment;
+  export let isHidden = false;
+  let projectChainData = filterCurrentChainData(project.chainData);
 </script>
 
-<a class="wrapper" href={buildProjectUrl(project.source.forge, project.source.ownerName, project.source.repoName)}>
-  <div class="project-card">
+<a
+  class="wrapper"
+  href={buildProjectUrl(project.source.forge, project.source.ownerName, project.source.repoName)}
+>
+  <div class="project-card" class:hidden-project={isHidden}>
     <div
       class="background"
-      style:background-color={isClaimed(project)
+      style:background-color={isClaimed(projectChainData)
         ? 'var(--color-primary-level-2)'
         : 'var(--color-foreground-level-1)'}
     />
     <div class="header">
-      <div class="avatar"><ProjectAvatar {project} size="large" outline /></div>
+      <div class="avatar">
+        <ProjectAvatar project={projectChainData} size="large" outline />
+      </div>
     </div>
     <div class="name-and-description">
       <div class="source">
@@ -73,7 +89,10 @@
     gap: 1rem;
     display: flex;
     flex-direction: column;
-    transition: box-shadow 0.2s, backgorund-color 0.2s, transform 0.2s;
+    transition:
+      box-shadow 0.2s,
+      backgorund-color 0.2s,
+      transform 0.2s;
   }
 
   .wrapper:hover:not(:active) .project-card,
@@ -108,5 +127,17 @@
     align-items: center;
     gap: 0.125rem;
     color: var(--color-foreground-level-6);
+  }
+
+  .hidden-project {
+    color: var(--color-foreground);
+    opacity: 0;
+    animation: fadeIn 1s ease forwards;
+  }
+
+  @keyframes fadeIn {
+    to {
+      opacity: 0.3;
+    }
   }
 </style>

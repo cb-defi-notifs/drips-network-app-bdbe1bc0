@@ -110,17 +110,21 @@
   });
 </script>
 
+<!-- svelte-ignore a11y-no-static-element-interactions -->
 <span
   bind:this={tooltipElem}
   class="tooltip"
   class:disabled
-  on:mouseenter={() => !disabled && handleHover(true)}
-  on:mouseleave={() => !disabled && handleHover(false)}
+  on:pointerover={(e) => {
+    if (!disabled && e.pointerType !== 'touch') handleHover(true);
+  }}
+  on:pointerleave={() => !disabled && handleHover(false)}
 >
   <div class="trigger"><slot /></div>
   {#if expanded}
+    <!-- svelte-ignore a11y-no-static-element-interactions -->
     <div
-      transition:fade|local={{ duration: 200 }}
+      transition:fade={{ duration: 200 }}
       bind:this={contentElem}
       class="expanded-tooltip"
       style:left={`${tooltipPos.left}px`}

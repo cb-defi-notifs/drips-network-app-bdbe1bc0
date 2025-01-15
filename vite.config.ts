@@ -1,9 +1,9 @@
+import { sentrySvelteKit } from '@sentry/sveltekit';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vitest/config';
-import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
 const config = defineConfig({
-  plugins: [sveltekit(), nodePolyfills()],
+  plugins: [sentrySvelteKit(), sveltekit()],
   test: {
     // Jest like globals
     globals: true,
@@ -19,12 +19,13 @@ const config = defineConfig({
         'cupertino-pane',
       ],
     },
+    testTimeout: 7000,
   },
   build: {
     target: 'es2020',
   },
   optimizeDeps: {
-    exclude: ['radicle-design-system'],
+    exclude: [],
     esbuildOptions: {
       target: 'es2020',
     },

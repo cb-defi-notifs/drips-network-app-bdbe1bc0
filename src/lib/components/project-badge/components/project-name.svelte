@@ -3,17 +3,9 @@
 
   export const PROJECT_NAME_FRAGMENT = gql`
     fragment ProjectName on Project {
-      ... on ClaimedProject {
-        source {
-          ownerName
-          repoName
-        }
-      }
-      ... on UnclaimedProject {
-        source {
-          ownerName
-          repoName
-        }
+      source {
+        ownerName
+        repoName
       }
     }
   `;
@@ -28,6 +20,7 @@
 </script>
 
 <span class="text-foreground-level-5 typo-text"
-  >{#if showSource}{project.source.ownerName}/{/if}<span class="text-foreground">{project.source.repoName}</span
+  >{#if showSource}{project.source.ownerName}/{/if}<span class="text-foreground"
+    >{project.source.repoName}</span
   ></span
 >

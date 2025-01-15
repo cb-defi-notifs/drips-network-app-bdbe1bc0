@@ -1,8 +1,10 @@
 <script lang="ts" context="module">
   export const SUPPORT_CARD_DRIP_LIST_FRAGMENT = gql`
+    ${CREATE_DONATION_FLOW_DRIP_LIST_FRAGMENT}
     ${DRIP_LIST_BADGE_FRAGMENT}
     ${ADD_DRIP_LIST_MEMBER_FLOW_DRIP_LIST_TO_ADD_FRAGMENT}
     fragment SupportCardDripList on DripList {
+      ...CreateDonationFlowDripList
       ...DripListBadge
       ...AddDripListMemberFlowDripListToAdd
       account {
@@ -16,37 +18,30 @@
   `;
 
   export const SUPPORT_CARD_PROJECT_FRAGMENT = gql`
+    ${CREATE_DONATION_FLOW_PROJECT_FRAGMENT}
     ${PROJECT_AVATAR_FRAGMENT}
     ${ADD_DRIP_LIST_MEMBER_FLOW_PROJECT_TO_ADD_FRAGMENT}
     fragment SupportCardProject on Project {
+      ...CreateDonationFlowProject
       ...AddDripListMemberFlowProjectToAdd
-      ...ProjectAvatar
-      ... on ClaimedProject {
-        owner {
-          accountId
-        }
-        account {
-          accountId
-        }
-        source {
-          url
-        }
+      account {
+        accountId
       }
-      ... on UnclaimedProject {
-        source {
-          url
-        }
+      source {
+        url
+      }
+      chainData {
+        ...ProjectAvatar
       }
     }
   `;
 </script>
 
 <script lang="ts">
-  import Heart from 'radicle-design-system/icons/Heart.svelte';
+  import Heart from '$lib/components/icons/Heart.svelte';
   import ProjectAvatar, {
     PROJECT_AVATAR_FRAGMENT,
   } from '$lib/components/project-avatar/project-avatar.svelte';
-  import Button from '$lib/components/button/button.svelte';
   import walletStore from '$lib/stores/wallet/wallet.store';
   import Spinner from '$lib/components/spinner/spinner.svelte';
   import { fade } from 'svelte/transition';
@@ -59,11 +54,7 @@
     ADD_DRIP_LIST_MEMBER_FLOW_LISTS_FRAGMENT,
     ADD_DRIP_LIST_MEMBER_FLOW_PROJECT_TO_ADD_FRAGMENT,
   } from '$lib/flows/edit-drip-list/add-member/add-drip-list-member-steps';
-  import DripListIcon from 'radicle-design-system/icons/DripList.svelte';
-  import TokenStreams from 'radicle-design-system/icons/TokenStreams.svelte';
-  import createDripListStreamSteps from '$lib/flows/create-drip-list-stream/create-drip-list-stream-steps';
-  import Wallet from 'radicle-design-system/icons/Wallet.svelte';
-  import isClaimed from '$lib/utils/project/is-claimed';
+  import createStreamFlowSteps from '$lib/flows/create-stream-flow/create-stream-flow-steps';
   import { gql } from 'graphql-request';
   import query from '$lib/graphql/dripsQL';
   import type {
@@ -73,48 +64,46 @@
     SupportCardProjectFragment,
   } from './__generated__/gql.generated';
   import { DRIP_LIST_BADGE_FRAGMENT } from '../drip-list-badge/drip-list-badge.svelte';
+  import createDonationFlowSteps, {
+    CREATE_DONATION_FLOW_DRIP_LIST_FRAGMENT,
+    CREATE_DONATION_FLOW_PROJECT_FRAGMENT,
+  } from '$lib/flows/create-donation/create-donation-flow-steps';
+  import unreachable from '$lib/utils/unreachable';
+  import TransitionedHeight from '../transitioned-height/transitioned-height.svelte';
+  import SupportButtons from './components/support-buttons.svelte';
+  import { BASE_URL } from '$lib/utils/base-url';
+  import awaitStoreValue from '$lib/utils/await-store-value';
+  import filterCurrentChainData from '$lib/utils/filter-current-chain-data';
+  import network from '$lib/stores/wallet/network';
 
   export let project: SupportCardProjectFragment | undefined = undefined;
   export let dripList: SupportCardDripListFragment | undefined = undefined;
 
-  let ownDripLists: OwnDripListsQuery['dripLists'] | null | undefined = undefined;
+  export let draftListMode = false;
 
-  $: isOwner =
-    $walletStore.connected &&
-    project &&
-    isClaimed(project) &&
-    ($walletStore.dripsAccountId === project?.owner?.accountId ||
-      $walletStore.dripsAccountId === dripList?.owner.accountId);
+  export let disabled = false;
+  $: {
+    if (!project && !dripList) disabled = true;
+  }
+
+  $: type = project ? ('project' as const) : ('dripList' as const);
+
+  let ownDripLists: OwnDripListsQuery['dripLists'] | null | undefined = undefined;
 
   let supportUrl: string;
   $: {
     if (project) {
       supportUrl = project.source.url;
     } else if (dripList) {
-      supportUrl = `https://drips.network/app/drip-lists/${dripList.account.accountId}`;
-    } else {
-      throw new Error('You must populate either the `project` or `dripList` prop.');
+      supportUrl = `${BASE_URL}/app/drip-lists/${dripList.account.accountId}`;
     }
   }
-
-  const { initialized } = walletStore;
-  $: isWalletConnected = $walletStore.connected;
 
   let updating = true;
   async function updateState() {
     updating = true;
 
-    if (!$initialized) {
-      // Wait for wallet to be initialized before proceeding
-      await new Promise<void>((resolve) => {
-        const unsubscribe = initialized.subscribe((v) => {
-          if (v) {
-            unsubscribe();
-            resolve();
-          }
-        });
-      });
-    }
+    await awaitStoreValue(walletStore.initialized, (v) => v);
 
     const { address } = $walletStore;
     if (!address) {
@@ -125,8 +114,8 @@
 
     const ownDripListsQuery = gql`
       ${ADD_DRIP_LIST_MEMBER_FLOW_LISTS_FRAGMENT}
-      query OwnDripLists($ownerAddress: String!) {
-        dripLists(where: { ownerAddress: $ownerAddress }) {
+      query OwnDripLists($ownerAddress: String!, $chains: [SupportedChain!]) {
+        dripLists(chains: $chains, where: { ownerAddress: $ownerAddress }) {
           ...AddDripListMemberFlowLists
           account {
             accountId
@@ -140,6 +129,7 @@
       ownDripListsQuery,
       {
         ownerAddress: address,
+        chains: [network.gqlName],
       },
     );
 
@@ -160,12 +150,17 @@
     updateState();
   }
 
-  function handleNewStreamButton() {
-    const dripListId = dripList?.account.accountId;
-    return dripListId && modal.show(Stepper, undefined, createDripListStreamSteps(dripListId));
+  function onClickNewStream() {
+    const accountId = dripList?.account.accountId;
+    return (
+      accountId &&
+      modal.show(Stepper, undefined, createStreamFlowSteps(undefined, dripList?.account))
+    );
   }
 
-  async function handleAddtoDripListButton() {
+  async function onClickAddToDripList() {
+    if (!project && !dripList) return;
+
     if (!ownDripLists) {
       goto(buildUrl('/app/funder-onboarding', { urlToAdd: supportUrl }));
     } else {
@@ -173,11 +168,25 @@
       modal.show(Stepper, undefined, addDripListMemberSteps(ownDripLists, project, dripList));
     }
   }
+
+  function onClickNewDonation() {
+    return modal.show(
+      Stepper,
+      undefined,
+      createDonationFlowSteps(dripList?.account ?? project ?? unreachable()),
+    );
+  }
+
+  let supportMenuOpen = false;
+  async function onClickConnectWallet() {
+    await walletStore.connect();
+    supportMenuOpen = true;
+  }
 </script>
 
-<div class="become-supporter-card">
-  {#if ownDripLists === undefined || updating}
-    <div transition:fade|local={{ duration: 300 }} class="loading-overlay">
+<div class="become-supporter-card" class:disabled>
+  {#if !draftListMode && (ownDripLists === undefined || updating)}
+    <div transition:fade={{ duration: 300 }} class="loading-overlay">
       <Spinner />
     </div>
   {/if}
@@ -189,39 +198,30 @@
       </div>
       {#if project}
         <div>
-          <ProjectAvatar {project} size="large" outline />
+          <ProjectAvatar project={filterCurrentChainData(project.chainData)} size="large" outline />
         </div>
       {/if}
     </div>
   </div>
   <h2 class="pixelated">Become a supporter</h2>
-  <p>
-    {#if !isWalletConnected}
-      Connect your Ethereum wallet to see your support options.
-    {:else if dripList && isOwner}
-      Support everyone on your list with a single token stream or add it to another Drip List.
-    {:else}
-      Add this {project ? 'project' : ''} to a Drip List to flexibly support it with an ongoing contribution.
-    {/if}
-  </p>
-  <div class="flex flex-col gap-2">
-    {#if !isWalletConnected}
-      <Button on:click={() => walletStore.connect()} size="large" icon={Wallet} variant="primary"
-        >Connect wallet</Button
-      >
-    {:else}
-      {#if isOwner && dripList}
-        <Button on:click={handleNewStreamButton} size="large" icon={TokenStreams} variant="primary"
-          >Stream tokens</Button
-        >
-      {/if}
-      <Button
-        on:click={handleAddtoDripListButton}
-        size="large"
-        icon={DripListIcon}
-        variant="primary">Add to a Drip List</Button
-      >
-    {/if}
+  <p>Donate once, {dripList ? 'continuously, ' : ''}or add this to your Drip List.</p>
+  <div class="support-buttons-wrapper">
+    <div class="support-buttons">
+      <SupportButtons
+        {type}
+        {onClickConnectWallet}
+        {onClickNewStream}
+        {onClickAddToDripList}
+        {onClickNewDonation}
+        bind:supportMenuOpen
+      />
+    </div>
+    <!-- Invisible duplicate of support buttons for smooth transition -->
+    <div class="support-buttons-placeholder">
+      <TransitionedHeight transitionHeightChanges={true}>
+        <SupportButtons transitions={false} {type} bind:supportMenuOpen />
+      </TransitionedHeight>
+    </div>
   </div>
 </div>
 
@@ -235,6 +235,11 @@
     padding: 1rem;
     gap: 1rem;
     position: relative;
+  }
+
+  .become-supporter-card.disabled {
+    opacity: 0.5;
+    pointer-events: none;
   }
 
   .loading-overlay {
@@ -285,5 +290,21 @@
 
   p {
     color: var(--color-foreground-level-6);
+  }
+
+  .support-buttons-wrapper {
+    position: relative;
+  }
+
+  .support-buttons {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+  }
+
+  .support-buttons-placeholder {
+    opacity: 0;
+    pointer-events: none;
   }
 </style>

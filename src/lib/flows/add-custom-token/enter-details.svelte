@@ -5,14 +5,15 @@
   import StepLayout from '$lib/components/step-layout/step-layout.svelte';
   import tokens from '$lib/stores/tokens';
   import wallet from '$lib/stores/wallet/wallet.store';
-  import { fetchInfo } from '$lib/utils/erc20';
-  import { isAddress } from 'ethers/lib/utils';
-  import type { TextInputValidationState } from 'radicle-design-system/TextInput';
+  import type { TextInputValidationState } from '$lib/components/text-input/text-input';
   import TextInput from '$lib/components/text-input/text-input.svelte';
   import assert from '$lib/utils/assert';
   import { createEventDispatcher } from 'svelte';
   import type { StepComponentEvents } from '$lib/components/stepper/types';
   import validateUrl from '$lib/utils/validate-url';
+  import { isAddress } from 'ethers';
+  import { executeErc20ReadMethod } from '$lib/utils/sdk/erc20/erc20';
+  import type { OxString } from '$lib/utils/sdk/sdk-types';
 
   const dispatch = createEventDispatcher<StepComponentEvents>();
 
@@ -37,14 +38,32 @@
   async function updateTokenInfo() {
     tokenAddressValidationState = { type: 'pending' };
     try {
-      const info = await fetchInfo(tokenAddress, $wallet.provider);
+      const name = await executeErc20ReadMethod({
+        functionName: 'name',
+        token: tokenAddress as OxString,
+        args: [],
+      });
 
-      tokenName = info.name;
-      tokenSymbol = info.symbol;
-      tokenDecimals = info.decimals;
+      const symbol = await executeErc20ReadMethod({
+        functionName: 'symbol',
+        token: tokenAddress as OxString,
+        args: [],
+      });
+
+      const decimals = Number(
+        await executeErc20ReadMethod({
+          functionName: 'decimals',
+          token: tokenAddress as OxString,
+          args: [],
+        }),
+      );
+
+      tokenName = name;
+      tokenSymbol = symbol;
+      tokenDecimals = decimals;
 
       tokenAddressValidationState = { type: 'valid' };
-    } catch (e) {
+    } catch {
       tokenAddressValidationState = {
         type: 'invalid',
         message: 'Unable to verify ERC-20 token at this address',
@@ -90,7 +109,7 @@
   <StepHeader
     emoji="💀"
     headline="Add custom token"
-    description="Warning: You’re about to add a token which is not officially-supported by the Drips app. If this token is not fully compliant with the ERC-20 token standard, any deposited tokens <b class='typo-text-bold'>may be unrecoverable</b>."
+    description="Warning: You’re about to add a token which is not officially-supported by the Drips app. If this token is not fully compliant with the ERC-20 token standard, any deposited tokens may be unrecoverable."
   />
   <FormField title="Token contract address*">
     <TextInput

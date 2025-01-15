@@ -1,20 +1,33 @@
-import uniqBy from "lodash/uniqBy";
-import { addTypenameToDocument } from 'apollo-utilities';
+import uniqBy from 'lodash/uniqBy';
 import { parse } from 'graphql';
 import { GraphQLClient, type RequestDocument, type Variables } from 'graphql-request';
+import { addTypenameToDocument } from '@apollo/client/utilities';
+import { BASE_URL } from '$lib/utils/base-url';
+import { browser, dev } from '$app/environment';
 
 export default async function query<TResponse, TVariables extends Variables = Variables>(
   query: RequestDocument,
   variables?: TVariables,
   customFetch: typeof fetch = fetch,
 ): Promise<TResponse> {
-  const client = new GraphQLClient('/api/gql', { fetch: customFetch });
+  // We proxy client-side requests through an endpoint on this sveltekit app in order to
+  // inject the Authorization header.
+  // If we're currently in a browser or dev mode, we use the app's base URL to construct the endpoint.
+  // If we're on the server in prod, we use localhost in order for traffic to stay within the container
+  // and avoid network overhead.
+  // IMPORTANT: This assumes the app is running on port 8080 in the container, which should usually be the case.
+  const endpointLocation = browser || dev ? `${BASE_URL}/api/gql` : 'http://localhost:8080/api/gql';
 
-  const parsedQuery = typeof query === "string" ? parse(query) : query;
+  const client = new GraphQLClient(endpointLocation, {
+    fetch: customFetch,
+  });
+
+  const parsedQuery = typeof query === 'string' ? parse(query) : query;
 
   const queryWithTypenames = addTypenameToDocument(parsedQuery);
 
-  const data = await client.request<TResponse>({ ...queryWithTypenames, definitions: uniqBy(queryWithTypenames.definitions, "name.value") }, variables);
-
-  return data;
+  return await client.request<TResponse>(
+    { ...queryWithTypenames, definitions: uniqBy(queryWithTypenames.definitions, 'name.value') },
+    variables,
+  );
 }

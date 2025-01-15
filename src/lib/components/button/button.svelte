@@ -4,7 +4,8 @@
   import Spinner from '../spinner/spinner.svelte';
   import { fade } from 'svelte/transition';
 
-  export let variant: 'normal' | 'primary' | 'destructive' | 'ghost' = 'normal';
+  export let variant: 'normal' | 'primary' | 'destructive' | 'destructive-outline' | 'ghost' =
+    'normal';
   export let icon: ComponentType | undefined = undefined;
   export let disabled = false;
   export let ariaLabel: string | undefined = undefined;
@@ -14,6 +15,9 @@
   export let href: string | undefined = undefined;
   export let target: string | undefined = undefined;
   export let rel: string | undefined = undefined;
+  export let type: 'submit' | 'reset' | 'button' = 'button';
+  export let form: string | undefined = undefined;
+  export let justify: 'left' | 'right' | 'center' = 'center';
 
   $: isDisabled = disabled || loading;
 
@@ -21,10 +25,16 @@
 
   $: primaryColor = el ? getComputedStyle(el).getPropertyValue('--color-primary') : undefined;
 
-  $: textColor =
-    primaryColor && (variant === 'destructive' || variant === 'primary')
-      ? getContrastColor(primaryColor)
-      : 'var(--color-foreground)';
+  let textColor = 'var(--color-foreground)';
+  $: {
+    if (variant === 'destructive-outline') {
+      textColor = 'var(--color-negative-level-6)';
+    } else if (primaryColor && (variant === 'destructive' || variant === 'primary')) {
+      textColor = getContrastColor(primaryColor);
+    } else {
+      textColor = 'var(--color-foreground)';
+    }
+  }
 </script>
 
 <svelte:element
@@ -34,12 +44,20 @@
   {href}
   {target}
   {rel}
-  class="button size-{size}"
+  {form}
+  class="button size-{size} justify-{justify}"
   class:disabled={isDisabled}
+  class:loading
   disabled={isDisabled}
   aria-disabled={isDisabled}
   on:click|stopPropagation
   data-testid={dataTestId}
+  on:mouseenter
+  on:mouseleave
+  on:focus
+  role={href ? 'link' : 'button'}
+  style:--color-foreground={variant === 'destructive-outline' ? 'var(--color-negative)' : null}
+  type={href ? null : type}
 >
   <div
     class:with-icon-text={Boolean(icon) && Boolean($$slots.default)}
@@ -57,7 +75,7 @@
     {/if}
     <slot />
     {#if loading}
-      <div out:fade|local={{ duration: 300 }} class="loading">
+      <div out:fade={{ duration: 300 }} class="loading">
         <Spinner />
       </div>
     {/if}
@@ -95,7 +113,12 @@
     white-space: nowrap;
     color: var(--color-foreground);
     user-select: none;
-    transition: background-color 0.3s, color 0.3s, transform 0.2s, box-shadow 0.2s, opacity 0.3s;
+    transition:
+      background-color 0.3s,
+      color 0.3s,
+      transform 0.2s,
+      box-shadow 0.2s,
+      opacity 0.3s;
     position: relative;
   }
 
@@ -119,11 +142,15 @@
     font-size: 14px;
   }
 
-  .button .inner:not(.ghost) {
-    box-shadow: var(--elevation-low);
+  .button .inner.normal {
+    background-color: var(--color-background);
   }
 
-  .button .inner.primary {
+  .button .inner:not(.ghost) {
+    box-shadow: 0px 0px 0px 1px var(--color-foreground);
+  }
+
+  .button:not(.loading) .inner.primary {
     background-color: var(--color-primary);
   }
 
@@ -141,14 +168,18 @@
 
   .button:not(.disabled):hover .inner,
   .button:not(.disabled):focus-visible .inner {
-    box-shadow: 0px 0px 0px 1px var(--color-foreground), 0 2px 0px 1px var(--color-foreground),
+    box-shadow:
+      0px 0px 0px 1px var(--color-foreground),
+      0 2px 0px 1px var(--color-foreground),
       inset 0 0px 0px 0px var(--color-foreground);
     transform: translateY(-2px);
   }
 
   .button:not(.disabled):active .inner {
     transform: translateY(0px);
-    box-shadow: 0px 0px 0px 1px var(--color-foreground), 0 0px 0px 0px var(--color-foreground);
+    box-shadow:
+      0px 0px 0px 1px var(--color-foreground),
+      0 0px 0px 0px var(--color-foreground);
   }
 
   .button:focus {
@@ -165,5 +196,13 @@
   .button.disabled {
     opacity: 0.5;
     pointer-events: none;
+  }
+
+  .button.justify-left .inner {
+    justify-content: start;
+  }
+
+  .button.justify-right .inner {
+    justify-content: end;
   }
 </style>

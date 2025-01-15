@@ -5,8 +5,7 @@
   import getContrastColor from '$lib/utils/get-contrast-text-color';
   import { getSplitPercent } from '$lib/utils/splits/get-split-percent';
   import { fade } from 'svelte/transition';
-  import SplitsListComponent, { type Splits } from '../../splits.svelte';
-  import type { SplitsComponentSplitsReceiver, SplitGroup } from '../../splits.svelte';
+  import SplitsListComponent from '../../splits.svelte';
   import Pile from '$lib/components/pile/pile.svelte';
   import { tick, type SvelteComponent, onMount } from 'svelte';
   import ProjectAvatar from '$lib/components/project-avatar/project-avatar.svelte';
@@ -14,12 +13,18 @@
   import { sineInOut } from 'svelte/easing';
   import mapFilterUndefined from '$lib/utils/map-filter-undefined';
   import DripListBadge from '$lib/components/drip-list-badge/drip-list-badge.svelte';
-  import ChevronRight from 'radicle-design-system/icons/ChevronRight.svelte';
+  import ChevronRight from '$lib/components/icons/ChevronRight.svelte';
   import isClaimed from '$lib/utils/project/is-claimed';
+  import { browser } from '$app/environment';
+  import filterCurrentChainData from '$lib/utils/filter-current-chain-data';
+  import unreachable from '$lib/utils/unreachable';
+  import type { SplitGroup, Splits, SplitsComponentSplitsReceiver } from '../../types';
 
   export let split: SplitsComponentSplitsReceiver | SplitGroup;
+  export let disableLink = true;
   export let linkToNewTab = false;
   export let isNested = false;
+  export let draft = false;
 
   /** Set to false to hide the chevron next to split groups. */
   export let groupsExpandable = true;
@@ -28,6 +33,8 @@
   export let isLast = false;
   /** Set to true if it's the first split in a list. Enables the little gradient line at the top from the source. */
   export let isFirst = false;
+
+  export let disableTooltip = false;
 
   let element: HTMLDivElement;
 
@@ -57,7 +64,8 @@
   }
 
   interface ComponentAndProps {
-    component: typeof SvelteComponent;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    component: typeof SvelteComponent<any>;
     props: Record<string, unknown>;
   }
 
@@ -73,7 +81,6 @@
               showIdentity: false,
               address: s.account.address,
               size: 'medium',
-              outline: true,
               disableLink: true,
             },
           } as ComponentAndProps;
@@ -84,13 +91,14 @@
               dripList: s.dripList,
               showOwner: false,
               showName: false,
+              isLinked: !disableLink,
             },
           } as ComponentAndProps;
         case 'ProjectReceiver':
           return {
             component: ProjectAvatar,
             props: {
-              project: s.project,
+              project: filterCurrentChainData(s.project.chainData),
               outline: true,
             },
           } as ComponentAndProps;
@@ -106,9 +114,13 @@
   let groupPileElem: HTMLDivElement | undefined;
   let groupNameOffset = tweened(0, { duration: GROUP_EXPAND_DURATION, easing: sineInOut });
 
-  onMount(() => {
+  function alignGroupName() {
     groupNameOffset.set((groupPileElem?.offsetWidth ?? 0) + 8, { duration: 0 });
-  });
+  }
+
+  // Align group name on mount and when splits change
+  onMount(alignGroupName);
+  $: split && alignGroupName();
 
   async function toggleGroup() {
     if (!groupElem) return;
@@ -133,7 +145,7 @@
 </script>
 
 <div class="wrapper">
-  <div class="split" bind:this={element}>
+  <div class="split" class:draft bind:this={element}>
     <div class="arrow">
       <svg
         width="103"
@@ -144,8 +156,9 @@
       >
         <path
           d="M1 1C1 1 1 25 25 25C55.0704 25 102 25 102 25M102 25L95.5 18.5M102 25L95.5 31.5"
-          stroke="var(--color-foreground)"
+          stroke={draft ? 'var(--color-foreground-level-5)' : 'var(--color-foreground)'}
           stroke-linecap="round"
+          stroke-dasharray={draft ? '2,2' : undefined}
         />
       </svg>
       <div
@@ -153,10 +166,12 @@
         class:is-nested={isNested}
         style:color={isNested ? 'var(--color-foreground)' : percentageTextColor}
       >
-        {getSplitPercent(
-          split.__typename === 'SplitGroup' ? calcGroupWeight(split) : split.weight,
-          'pretty',
-        )}
+        <span class:opacity-50={groupExpanded}>
+          {getSplitPercent(
+            split.__typename === 'SplitGroup' ? calcGroupWeight(split) : split.weight,
+            'pretty',
+          )}
+        </span>
       </div>
       {#if isFirst}
         <div class="intro-line" />
@@ -167,12 +182,31 @@
     </div>
     <div class="receiver">
       {#if split.__typename === 'AddressReceiver'}
-        <IdentityBadge {linkToNewTab} address={split.account.address} size="medium" />
+        <IdentityBadge
+          {disableTooltip}
+          {disableLink}
+          {linkToNewTab}
+          address={split.account.address}
+          size="medium"
+        />
       {:else if split.__typename === 'DripListReceiver'}
-        <DripListBadge dripList={split.dripList} />
+        <DripListBadge isLinked={!disableLink} dripList={split.dripList} />
       {:else if split.__typename === 'ProjectReceiver'}
-        <PrimaryColorThemer colorHex={isClaimed(split.project) ? split.project.color : undefined}>
-          <ProjectBadge {linkToNewTab} project={split.project} />
+        {@const projectReceiverChainData =
+          split.__typename === 'ProjectReceiver'
+            ? filterCurrentChainData(split.project.chainData)
+            : unreachable()}
+        <PrimaryColorThemer
+          colorHex={isClaimed(projectReceiverChainData)
+            ? projectReceiverChainData.color
+            : undefined}
+        >
+          <ProjectBadge
+            tooltip={!disableTooltip}
+            linkTo={disableLink ? 'nothing' : undefined}
+            {linkToNewTab}
+            project={split.project}
+          />
         </PrimaryColorThemer>
       {:else if split.__typename === 'SplitGroup'}
         <div
@@ -184,24 +218,33 @@
             <div class="pile" bind:this={groupPileElem}>
               <Pile transitionedOut={groupExpanded} components={getPileComponents(split.list)} />
             </div>
-            <div class="label" style:transform="translateX({$groupNameOffset}px)">
-              <div class="typo-header-4">{split.name}</div>
-              {#if split.list.length > 0 && groupsExpandable}
-                <div
-                  class="chevron"
-                  style:transform={groupExpanded ? 'rotate3d(1, 0, 0, 90deg)' : ''}
-                >
-                  <ChevronRight />
-                </div>
-              {/if}
-            </div>
+            {#if browser}
+              <div in:fade class="label" style:transform="translateX({$groupNameOffset}px)">
+                <div class="typo-header-4">{split.name}</div>
+                {#if split.list.length > 0 && groupsExpandable}
+                  <div
+                    class="chevron"
+                    style:transform={groupExpanded ? 'rotate3d(1, 0, 0, 90deg)' : ''}
+                  >
+                    <ChevronRight />
+                  </div>
+                {/if}
+              </div>
+            {/if}
             <div class="label placeholder" aria-hidden="true">
               <div class="typo-header-4">{split.name}</div>
             </div>
           </button>
           {#if groupExpanded}
-            <div transition:fade|local={{ duration: GROUP_EXPAND_DURATION }} class="members">
-              <SplitsListComponent {linkToNewTab} isGroup list={split.list} />
+            <div transition:fade={{ duration: GROUP_EXPAND_DURATION }} class="members">
+              <SplitsListComponent
+                disableTooltips={disableTooltip}
+                disableLinks={disableLink}
+                {draft}
+                {linkToNewTab}
+                isGroup
+                list={split.list}
+              />
             </div>
           {/if}
           <div class="cutoff-gradient" />
@@ -214,11 +257,27 @@
 <style>
   .wrapper {
     position: relative;
+    z-index: 1;
+  }
+
+  /* background overlay so it covers row above, when row above is expanding */
+  .wrapper:after {
+    content: '';
+    display: block;
+    position: absolute;
+    background-color: var(--color-background);
+    /* 1px offset so it doesn't break the linework in top-left corner */
+    top: 1px;
+    left: 1px;
+    width: calc(100% - 1px);
+    height: calc(100% - 1px);
   }
 
   .split {
     display: flex;
     gap: 1rem;
+    position: relative;
+    z-index: 1;
   }
 
   .arrow {
@@ -228,19 +287,28 @@
   .arrow .line {
     position: absolute;
     top: 0;
-    left: 0.5px;
+    left: 0.25px;
     width: 1px;
     height: calc(100% + 1px);
-    background-color: var(--color-foreground);
+    border-left: 1px solid var(--color-foreground);
+  }
+
+  .draft .arrow .line {
+    border-left: 1px dashed var(--color-foreground-level-5);
   }
 
   .arrow .intro-line {
     position: absolute;
     top: -1rem;
     left: 0.5px;
-    background: linear-gradient(to bottom, transparent, var(--color-foreground));
+    border-left: 1px solid var(--color-foreground);
     height: calc(1rem + 1px);
     width: 1px;
+  }
+
+  .draft .arrow .intro-line {
+    border-left: 1px dashed var(--color-foreground-level-5);
+    height: calc(1rem - 2px); /* dashes line up at -2px */
   }
 
   .arrow .percentage {
@@ -263,6 +331,19 @@
       linear-gradient(45deg, var(--color-background), var(--color-background));
   }
 
+  .draft .arrow .percentage {
+    background-color: var(--color-foreground-level-5);
+  }
+
+  .draft .arrow .percentage.is-nested {
+    background: linear-gradient(
+        45deg,
+        var(--color-foreground-level-2),
+        var(--color-foreground-level-2)
+      ),
+      linear-gradient(45deg, var(--color-background), var(--color-background));
+  }
+
   .receiver {
     display: flex;
     position: relative;
@@ -271,7 +352,6 @@
   }
 
   .group {
-    overflow: hidden;
     width: 100%;
   }
 
@@ -285,6 +365,7 @@
 
   .group .members {
     margin-top: -0.5rem;
+    margin-left: -4rem;
   }
 
   .name {

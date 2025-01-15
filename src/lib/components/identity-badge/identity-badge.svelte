@@ -14,26 +14,20 @@
   export let disableSelection = false;
   export let size: 'small' | 'normal' | 'medium' | 'big' | 'huge' | 'gigantic' = 'normal';
   export let disableTooltip = false;
-  export let outline = false;
   export let linkToNewTab = false;
   export let showFullAddress = false;
   export let muted = false;
 
   export let avatarImgElem: HTMLImageElement | undefined = undefined;
   export let isReverse = false;
+  export let tag: string | undefined = undefined;
 
-  const ensConnected = ensStore.connected;
-
-  $: $ensConnected && ensStore.lookup(address);
+  $: ensStore.lookup(address);
   $: ens = $ensStore[address];
 
   $: blockyUrl = `/api/blockies/${address}`;
 
-  function getLink() {
-    if (disableLink) return undefined;
-
-    return `/app/${ens?.name ?? address}`;
-  }
+  $: link = disableLink ? undefined : `/app/${ens?.name ?? address}`;
 
   $: toDisplay = ens?.name ?? (showFullAddress ? address : formatAddress(address));
 
@@ -73,10 +67,10 @@
 
 <Tooltip text={address} copyable disabled={disableTooltip}>
   <svelte:element
-    this={getLink() ? 'a' : 'span'}
-    href={getLink()}
+    this={link ? 'a' : 'span'}
+    href={link}
     target={linkToNewTab ? '_blank' : undefined}
-    class="identity-badge flex items-center relative text-left text-foreground tabular-nums {getLink() &&
+    class="identity-badge flex items-center relative text-left text-foreground tabular-nums {link &&
     showAvatar &&
     !showIdentity
       ? 'focus-visible:ring-8 focus-visible:ring-primary-level-1 rounded-full mouse:hover:ring-4 mouse:hover:ring-primary-level-1'
@@ -93,7 +87,6 @@
         bind:imgElem={avatarImgElem}
         src={ens?.avatarUrl}
         placeholderSrc={blockyUrl}
-        {outline}
       />
     {/if}
     {#if showIdentity}
@@ -104,21 +97,20 @@
         >
           {toDisplay}
           {#if ens?.name && showFullAddress}
-            <div class="typo-text-small leading-none truncate">{address}</div>
+            <div class="leading-none truncate">{address}</div>
           {/if}
         </div>
         {#key toDisplay}
           <div
-            transition:fade|local={{ duration: 300 }}
+            transition:fade={{ duration: 300 }}
             class:text-foreground={size === 'gigantic'}
             class={`${currentFontClass} identity absolute overlay flex items-center`}
-            data-style:left={showAvatar ? `${currentSize + currentSize / 3}px` : '0'}
             class:hideOnMobile={hideAvatarOnMobile}
           >
             <div class="flex-1 min-w-0">
               <div class="truncate">{toDisplay}</div>
               {#if ens?.name && showFullAddress}
-                <div class="typo-text-small leading-none truncate text-foreground-level-5">
+                <div class="leading-none truncate text-foreground-level-5">
                   {address}
                 </div>
               {/if}
@@ -126,6 +118,11 @@
           </div>
         {/key}
       </div>
+      {#if tag}
+        <div class="tag typo-text-small">
+          {tag}
+        </div>
+      {/if}
     {/if}
   </svelte:element>
   <svelte:fragment slot="tooltip-content">
@@ -155,6 +152,13 @@
 
   .muted {
     color: var(--color-foreground-level-6);
+  }
+
+  .tag {
+    background-color: var(--color-primary-level-1);
+    color: var(--color-primary-level-6);
+    border-radius: 1rem 0 1rem 1rem;
+    padding: 0.125rem 0.5rem;
   }
 
   @media (max-width: 768px) {

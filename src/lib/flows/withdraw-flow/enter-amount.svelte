@@ -1,3 +1,15 @@
+<script lang="ts" context="module">
+  export const WITHDRAW_FLOW_ENTER_AMOUNT_STEP_BALANCES_FRAGMENT = gql`
+    ${CURRENT_AMOUNTS_USER_BALANCE_TIMELINE_ITEM_FRAGMENT}
+    fragment WithdrawFlowEnterAmountStepBalances on UserBalances {
+      tokenAddress
+      outgoing {
+        ...CurrentAmountsUserBalanceTimelineItem
+      }
+    }
+  `;
+</script>
+
 <script lang="ts">
   import Button from '$lib/components/button/button.svelte';
   import EmojiAndToken from '$lib/components/emoji-and-token/emoji-and-token.svelte';
@@ -5,59 +17,51 @@
   import StepHeader from '$lib/components/step-header/step-header.svelte';
   import StepLayout from '$lib/components/step-layout/step-layout.svelte';
   import Token from '$lib/components/token/token.svelte';
-  import balances from '$lib/stores/balances';
-  import streams from '$lib/stores/streams';
   import tokens from '$lib/stores/tokens';
-  import wallet from '$lib/stores/wallet/wallet.store';
   import formatTokenAmount from '$lib/utils/format-token-amount';
-  import { getAddressDriverClient } from '$lib/utils/get-drips-clients';
   import unreachable from '$lib/utils/unreachable';
-  import type { TextInputValidationState } from 'radicle-design-system/TextInput';
+  import type { TextInputValidationState } from '$lib/components/text-input/text-input';
   import TextInput from '$lib/components/text-input/text-input.svelte';
-  import { constants } from 'radicle-drips';
-  import { get, type Writable } from 'svelte/store';
-  import assert from '$lib/utils/assert';
+  import type { Writable } from 'svelte/store';
   import type { WithdrawFlowState } from './withdraw-flow-state';
-  import type { StepComponentEvents } from '$lib/components/stepper/types';
-  import expect from '$lib/utils/expect';
+  import { makeTransactPayload, type StepComponentEvents } from '$lib/components/stepper/types';
   import { createEventDispatcher } from 'svelte';
   import parseTokenAmount from '$lib/utils/parse-token-amount';
   import Toggle from '$lib/components/toggle/toggle.svelte';
-  import { formatUnits } from 'ethers/lib/utils';
-  import transact, { makeTransactPayload } from '$lib/components/stepper/utils/transact';
-  import mapFilterUndefined from '$lib/utils/map-filter-undefined';
   import SafeAppDisclaimer from '$lib/components/safe-app-disclaimer/safe-app-disclaimer.svelte';
+  import { buildBalanceChangePopulatedTx } from '$lib/utils/streams/streams';
+  import { gql } from 'graphql-request';
+  import {
+    CURRENT_AMOUNTS_USER_BALANCE_TIMELINE_ITEM_FRAGMENT,
+    streamCurrentAmountsStore,
+  } from '../../utils/current-amounts';
+  import contractConstants from '$lib/utils/sdk/utils/contract-constants';
 
   const dispatch = createEventDispatcher<StepComponentEvents>();
 
   export let context: Writable<WithdrawFlowState>;
 
-  const restorer = $context.restorer;
+  $: balance =
+    $context.userOutgoingTokenBalances.find(
+      (balance) => balance.tokenAddress.toLowerCase() === $context.tokenAddress.toLowerCase(),
+    ) ?? unreachable();
+
+  $: currentAmountsStore = streamCurrentAmountsStore(balance.outgoing, $context.tokenAddress);
 
   $: tokenInfo = tokens.getByAddress($context.tokenAddress) ?? unreachable();
-  $: estimate =
-    $balances.accounts[String($wallet.dripsAccountId) ?? unreachable()].tokens[
-      $context.tokenAddress
-    ].total.totals.remainingBalance;
 
-  let amount = restorer.restore('amount');
   let amountWei: bigint | undefined;
-  let withdrawAll = restorer.restore('withdrawAll');
-  $: if (withdrawAll) {
-    amount = formatUnits(
-      estimate / BigInt(constants.AMT_PER_SEC_MULTIPLIER),
-      tokenInfo.info.decimals,
-    );
-  }
-
-  $: if (amount) amountWei = parseTokenAmount(amount, tokenInfo.info.decimals);
+  $: if ($context.amount) amountWei = parseTokenAmount($context.amount, tokenInfo.info.decimals);
 
   let validationState: TextInputValidationState;
   $: {
-    if (withdrawAll && amountWei && amountWei > 0n) {
+    if ($context.withdrawAll && $currentAmountsStore.currentAmount.amount > 0n) {
       validationState = { type: 'valid' };
     } else if (amountWei && amountWei > 0n) {
-      if (amountWei * BigInt(constants.AMT_PER_SEC_MULTIPLIER) < estimate) {
+      if (
+        amountWei * BigInt(contractConstants.AMT_PER_SEC_MULTIPLIER) <
+        $currentAmountsStore.currentAmount.amount
+      ) {
         validationState = { type: 'valid' };
       } else {
         validationState = {
@@ -65,94 +69,50 @@
           message: 'You can only withdraw less than your current remaining streamable balance.',
         };
       }
-    } else if (amount && amountWei === undefined) {
+    } else if ($context.amount && amountWei === undefined) {
       validationState = { type: 'invalid', message: 'Invalid amount.' };
     } else {
       validationState = { type: 'unvalidated' };
     }
   }
 
-  function getAssetConfigHistory(dripsAccountId: string, tokenAddress: string) {
-    return (
-      get(streams).accounts[dripsAccountId].assetConfigs.find(
-        (ac) => ac.tokenAddress.toLowerCase() === tokenAddress.toLowerCase(),
-      ) ?? unreachable()
-    ).history;
-  }
-
   function triggerWithdraw() {
-    transact(
-      dispatch,
+    dispatch(
+      'transact',
       makeTransactPayload({
+        headline: `Withdraw ${tokenInfo?.info.symbol}`,
+        icon: {
+          component: EmojiAndToken,
+          props: {
+            emoji: '💰',
+            tokenAddress: tokenInfo.info.address,
+            animateTokenOnMount: true,
+          },
+        },
         before: async () => {
-          const { address, dripsAccountId } = $wallet;
-          assert(address && dripsAccountId);
+          const MAX_INT_128 = 170141183460469231731687303715884105728n;
 
-          const addressDriverClient = await getAddressDriverClient();
+          const amountToWithdraw = $context.withdrawAll
+            ? -MAX_INT_128
+            : -(amountWei ?? unreachable());
 
-          const ownAccount = $streams.accounts[dripsAccountId];
-          assert(ownAccount, "App hasnʼt yet fetched user's own account");
-
-          const assetConfig = ownAccount.assetConfigs.find(
-            (ac) => ac.tokenAddress.toLowerCase() === $context.tokenAddress.toLowerCase(),
-          );
-          assert(assetConfig, 'App hasnʼt yet fetched the right asset config');
-
-          const currentReceivers = mapFilterUndefined(assetConfig.streams, (stream) =>
-            stream.paused
-              ? undefined
-              : {
-                  accountId: stream.receiver.accountId,
-                  config: stream.streamConfig.raw,
-                },
-          );
-
-          assert(amountWei);
-
-          const tx = addressDriverClient.setStreams(
-            $context.tokenAddress,
-            currentReceivers,
-            currentReceivers,
-            address,
-            -amountWei,
-          );
+          const tx = await buildBalanceChangePopulatedTx(tokenInfo.info.address, amountToWithdraw);
 
           return {
             tx,
-            dripsAccountId,
           };
         },
-        transactions: (transactContext) => ({
-          transaction: () => transactContext.tx,
-        }),
-        after: async (_, transactContext) => {
-          const currentAssetConfigHistoryLength = getAssetConfigHistory(
-            transactContext.dripsAccountId,
-            $context.tokenAddress,
-          ).length;
 
-          await expect(
-            streams.refreshUserAccount,
-            () => {
-              const newLength = getAssetConfigHistory(
-                transactContext.dripsAccountId,
-                $context.tokenAddress,
-              ).length;
-
-              return newLength > currentAssetConfigHistoryLength;
-            },
-            5000,
-            1000,
-          );
-        },
+        transactions: ({ tx }) => [
+          {
+            transaction: tx,
+            applyGasBuffer: true,
+            title: `Withdraw ${tokenInfo?.info.symbol}`,
+          },
+        ],
       }),
     );
   }
-
-  $: restorer.saveAll({
-    withdrawAll,
-    amount,
-  });
 </script>
 
 <StepLayout>
@@ -168,7 +128,7 @@
         {tokenInfo.info.name ?? 'Unknown token'}
       </div>
       <div class="flex-1 min-w-0 truncate text-right text-foreground-level-4">
-        {formatTokenAmount(estimate, tokenInfo.info.decimals)}
+        {formatTokenAmount($currentAmountsStore.currentAmount.amount, tokenInfo.info.decimals)}
       </div>
       <div class="text-foreground-level-4">
         {tokenInfo.info.symbol}
@@ -176,16 +136,20 @@
     </div>
   </FormField>
   <FormField title="Amount to withdraw">
-    <TextInput
-      bind:value={amount}
-      disabled={withdrawAll}
-      variant={{ type: 'number', min: 0 }}
-      suffix={tokenInfo.info.symbol}
-      placeholder="Enter amount"
-      {validationState}
-    />
+    {#if $context.withdrawAll}
+      <TextInput value="Entire balance" disabled {validationState} />
+    {:else}
+      <TextInput
+        bind:value={$context.amount}
+        disabled={$context.withdrawAll}
+        variant={{ type: 'number', min: 0 }}
+        suffix={tokenInfo.info.symbol}
+        placeholder="Enter amount"
+        {validationState}
+      />
+    {/if}
     <svelte:fragment slot="action">
-      <Toggle bind:checked={withdrawAll} label="Max" />
+      <Toggle bind:checked={$context.withdrawAll} label="Max" />
     </svelte:fragment>
   </FormField>
   <SafeAppDisclaimer disclaimerType="drips" />

@@ -1,5 +1,5 @@
 import type { TokenInfo } from '@uniswap/token-lists';
-import { ethers } from 'ethers';
+import { isAddress } from 'ethers';
 import { z } from 'zod';
 import type { CustomTokenInfoWrapper } from './tokens.store';
 import assert from '$lib/utils/assert';
@@ -25,7 +25,10 @@ export function updateCustomToken(address: string, newTokenInfoWrapper: CustomTo
     (t) => t.info.address.toLowerCase() === address.toLowerCase(),
   );
 
-  assert(indexToUpdate !== -1, `Could not remove custom token with address '${address}': address not found`);
+  assert(
+    indexToUpdate !== -1,
+    `Could not remove custom token with address '${address}': address not found`,
+  );
 
   customTokenWrappers.splice(indexToUpdate, 1, newTokenInfoWrapper);
 
@@ -61,7 +64,7 @@ export function readCustomTokensList(): CustomTokenInfoWrapper[] {
         chainId: z.number(),
         address: z
           .string()
-          .refine((val) => ethers.utils.isAddress(val), 'Address must be a valid Ethereum address'),
+          .refine((val) => isAddress(val), 'Address must be a valid Ethereum address'),
         name: z.string(),
         decimals: z.number(),
         symbol: z.string(),

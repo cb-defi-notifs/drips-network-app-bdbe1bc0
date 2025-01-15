@@ -1,178 +1,309 @@
-<script lang="ts">
-  import type getIncomingSplits from '$lib/utils/splits/get-incoming-splits';
-  import Heart from 'radicle-design-system/icons/Heart.svelte';
-  import SectionHeader from '../section-header/section-header.svelte';
-  import SectionSkeleton from '../section-skeleton/section-skeleton.svelte';
-  import IdentityBadge from '../identity-badge/identity-badge.svelte';
-  import { getSplitPercent } from '$lib/utils/splits/get-split-percent';
-  import ProjectBadge from '../project-badge/project-badge.svelte';
-  import type { Stream } from '$lib/stores/streams/types';
-  import Amount from '../amount/amount.svelte';
-  import StreamStateBadge from '../stream-state-badge/stream-state-badge.svelte';
-  import DripListBadge from '../drip-list-badge/drip-list-badge.svelte';
-  import ChevronRight from 'radicle-design-system/icons/ChevronRight.svelte';
+<script lang="ts" context="module">
+  export const SUPPORTERS_SECTION_SUPPORT_ITEM_FRAGMENT = gql`
+    ${DRIP_LIST_BADGE_FRAGMENT}
+    ${PROJECT_BADGE_FRAGMENT}
+    ${CURRENT_AMOUNTS_TIMELINE_ITEM_FRAGMENT}
+    ${STREAM_STATE_STREAM_FRAGMENT}
+    fragment SupportersSectionSupportItem on SupportItem {
+      ... on DripListSupport {
+        account {
+          accountId
+        }
+        date
+        dripList {
+          ...DripListBadge
+        }
+        weight
+        totalSplit {
+          tokenAddress
+          amount
+        }
+      }
+      ... on OneTimeDonationSupport {
+        account {
+          accountId
+          address
+        }
+        amount {
+          amount
+          tokenAddress
+        }
+        date
+      }
+      ... on ProjectSupport {
+        account {
+          accountId
+          driver
+        }
+        date
+        project {
+          ...ProjectBadge
+        }
+        weight
+        totalSplit {
+          tokenAddress
+          amount
+        }
+      }
+      ... on StreamSupport {
+        stream {
+          ...StreamStateStream
+          config {
+            amountPerSecond {
+              amount
+              tokenAddress
+            }
+            dripId
+          }
+          createdAt
+          sender {
+            account {
+              accountId
+              address
+            }
+          }
+          timeline {
+            ...CurrentAmountsTimelineItem
+          }
+        }
+        date
+      }
+    }
+  `;
+</script>
 
-  export let type: 'project' | 'dripList';
-  export let headline = 'Supporters';
+<script lang="ts">
+  import Heart from '$lib/components/icons/Heart.svelte';
+  import type SectionSkeleton from '../section-skeleton/section-skeleton.svelte';
+  import IdentityBadge from '../identity-badge/identity-badge.svelte';
+  import SupportItem from './components/support-item.svelte';
+  import { gql } from 'graphql-request';
+  import type { SupportersSectionSupportItemFragment } from './__generated__/gql.generated';
+  import tokensStore from '$lib/stores/tokens/tokens.store';
+  import formatDate from '$lib/utils/format-date';
+  import DripListBadge, {
+    DRIP_LIST_BADGE_FRAGMENT,
+  } from '../drip-list-badge/drip-list-badge.svelte';
+  import ProjectBadge, { PROJECT_BADGE_FRAGMENT } from '../project-badge/project-badge.svelte';
+  import { getSplitPercent } from '$lib/utils/splits/get-split-percent';
+  import buildProjectUrl from '$lib/utils/build-project-url';
+  import buildStreamUrl from '$lib/utils/build-stream-url';
+  import walletStore from '$lib/stores/wallet/wallet.store';
+  import { CURRENT_AMOUNTS_TIMELINE_ITEM_FRAGMENT } from '$lib/utils/current-amounts';
+  import AggregateFiatEstimate from '../aggregate-fiat-estimate/aggregate-fiat-estimate.svelte';
+  import formatTokenAmount from '$lib/utils/format-token-amount';
+  import RealtimeAmount from '../amount/realtime-amount.svelte';
+  import streamState, {
+    STREAM_STATE_LABELS,
+    STREAM_STATE_STREAM_FRAGMENT,
+  } from '$lib/utils/stream-state';
+  import formatAmtPerSec from '$lib/stores/amt-delta-unit/utils/format-amt-per-sec';
+  import { fade } from 'svelte/transition';
+  import AddUnknownTokenButton from './components/add-unknown-token-button.svelte';
+  import Section from '../section/section.svelte';
+
+  export let supportItems: SupportersSectionSupportItemFragment[];
+
+  export let ownerAccountId: string | undefined = undefined;
+
+  export let type: 'project' | 'dripList' | 'address';
+  export let headline = 'Support';
   export let emptyStateHeadline = 'No supporters';
-  export let emptyStateText = `This ${
-    type === 'dripList' ? 'Drip List' : 'project'
-  } doesnʼt have any supporters yet.`;
+
+  export let collapsed = false;
+  export let collapsable = false;
+
+  let emptyStateText: string;
+  $: {
+    switch (type) {
+      case 'project':
+        emptyStateText = `This project doesnʼt have any supporters yet.`;
+        break;
+      case 'dripList':
+        emptyStateText = `This Drip List doesnʼt have any supporters yet.`;
+        break;
+      case 'address':
+        emptyStateText = `This user doesnʼt have any supporters yet.`;
+        break;
+    }
+  }
 
   export let infoTooltip: string | undefined = undefined;
 
-  export let incomingSplits:
-    | ReturnType<typeof getIncomingSplits>
-    | Awaited<ReturnType<typeof getIncomingSplits>>
-    | undefined;
-
-  export let forceLoading = false;
-  export let supportStreams: Stream[] = [];
-
-  function flattenIncomingSplits(incomingSplits: Awaited<ReturnType<typeof getIncomingSplits>>) {
-    return [
-      ...incomingSplits.dripLists.map((v) => ({ type: 'dripList' as const, item: v })),
-      ...incomingSplits.projects.map((v) => ({ type: 'project' as const, item: v })),
-      ...incomingSplits.users.map((v) => ({ type: 'user' as const, item: v })),
-    ];
-  }
+  /** Bind to this to get the section skeleton instance of this section. */
+  export let sectionSkeleton: SectionSkeleton | undefined = undefined;
 </script>
 
 <section class="app-section">
-  <SectionHeader {infoTooltip} icon={Heart} label={headline} />
-  {#if forceLoading}
-    <SectionSkeleton loaded={false} />
-  {:else if incomingSplits === undefined}
-    <SectionSkeleton empty={false} />
-  {:else}
-    {#await incomingSplits}
-      <SectionSkeleton loaded={false} />
-    {:then result}
-      <SectionSkeleton
-        loaded={true}
-        empty={flattenIncomingSplits(result).length === 0 && supportStreams.length === 0}
-        emptyStateEmoji="🫧"
-        {emptyStateHeadline}
-        {emptyStateText}
-      >
-        <div class="lists">
-          {#if type === 'dripList' && supportStreams.length > 0}
-            <h5>Support streams</h5>
-            <!-- TODO: Limit supporters list to some max amount, make expandable -->
-            <div class="supporters-list">
-              {#each supportStreams as stream}
-                <a
-                  href="/app/{stream.sender.accountId}/tokens/{stream.streamConfig.amountPerSecond
-                    .tokenAddress}/streams/{stream.streamConfig.dripId}"
-                  class="item clickable"
-                >
-                  <IdentityBadge size="medium" address={stream.sender.address} />
-                  <div class="amount">
-                    <StreamStateBadge
-                      streamId={stream.id}
-                      {...stream}
-                      senderId={stream.sender.accountId}
-                      tokenAddress={stream.streamConfig.amountPerSecond.tokenAddress}
-                      size="small"
-                    />
-                    <span
-                      ><Amount
-                        amountPerSecond={stream.streamConfig.amountPerSecond}
-                        amountPerSecClasses="text-foreground-level-5 tabular-nums"
-                        showPlusMinus={false}
-                      /></span
-                    >
-                    <ChevronRight />
-                  </div>
-                </a>
-              {/each}
-            </div>
-          {/if}
-          {#if type === 'dripList'}
-            <h5>Other supporters</h5>
-          {/if}
-          {#if flattenIncomingSplits(result).length > 0}
-            <div class="supporters-list">
-              {#each flattenIncomingSplits(result) as incomingSplit}
-                <div class="item">
-                  {#if incomingSplit.type === 'user'}
-                    <IdentityBadge size="medium" address={incomingSplit.item.value.address} />
-                  {:else if incomingSplit.type === 'dripList'}
-                    <DripListBadge
-                      dripList={incomingSplit.item.value}
-                    />
-                  {:else if incomingSplit.type === 'project'}
-                    <ProjectBadge project={incomingSplit.item.value} />
-                  {/if}
-                  <span class="muted"
-                    >{getSplitPercent(incomingSplit.item.weight)}% of incoming funds
-                  </span>
+  <Section
+    bind:collapsed
+    bind:collapsable
+    header={{
+      icon: Heart,
+      label: headline,
+      infoTooltip,
+    }}
+    skeleton={{
+      loaded: true,
+      empty: supportItems.length === 0,
+      emptyStateEmoji: '🫧',
+      emptyStateHeadline,
+      emptyStateText,
+    }}
+    bind:skeletonInstance={sectionSkeleton}
+  >
+    <div class="items">
+      {#each supportItems as item}
+        {#if item.__typename === 'OneTimeDonationSupport'}
+          <SupportItem
+            title={{
+              component: IdentityBadge,
+              props: {
+                tag:
+                  item.account.accountId === $walletStore.dripsAccountId
+                    ? 'You'
+                    : item.account.accountId === ownerAccountId
+                      ? 'Owner'
+                      : undefined,
+                disableTooltip: true,
+                address: item.account.address,
+              },
+            }}
+            subtitle={formatDate(item.date)}
+          >
+            <svelte:fragment slot="amount-value">
+              <AggregateFiatEstimate amounts={[item.amount]} />
+            </svelte:fragment>
+            <svelte:fragment slot="amount-sub">
+              {@const amount = item.amount}
+              {@const token = $tokensStore && tokensStore.getByAddress(amount.tokenAddress)}
+              {#if token}
+                <div in:fade|global={{ duration: 300 }}>
+                  {formatTokenAmount(
+                    {
+                      tokenAddress: amount.tokenAddress,
+                      amount: BigInt(amount.amount),
+                    },
+                    token.info.decimals,
+                    1n,
+                    false,
+                  )}
+                  {token.info.symbol}
                 </div>
-              {/each}
-            </div>
-          {:else}
-            <div class="supporters-list">
-              <div class="item">
-                <span class="muted">No other supporters</span>
-              </div>
-            </div>
-          {/if}
-        </div>
-      </SectionSkeleton>
-    {:catch}
-      <SectionSkeleton loaded={true} error={true} />
-    {/await}
-  {/if}
+              {:else if tokensStore.customTokensLoaded}
+                <AddUnknownTokenButton tokenAddress={amount.tokenAddress} />
+              {:else}
+                <!-- Placeholder for right height during SSR -->
+                <span>⠀</span>
+              {/if}
+            </svelte:fragment>
+          </SupportItem>
+        {/if}
+        {#if item.__typename === 'StreamSupport'}
+          {@const stream = item.stream}
+          <SupportItem
+            href={buildStreamUrl(
+              stream.sender.account.accountId,
+              stream.config.amountPerSecond.tokenAddress,
+              stream.config.dripId,
+            )}
+            subtitle={formatDate(item.stream.createdAt)}
+            title={{
+              component: IdentityBadge,
+              props: {
+                disableTooltip: true,
+                tag:
+                  stream.sender.account.accountId === $walletStore.dripsAccountId
+                    ? 'You'
+                    : stream.sender.account.accountId === ownerAccountId
+                      ? 'Owner'
+                      : undefined,
+                address: item.stream.sender.account.address,
+              },
+            }}
+          >
+            <svelte:fragment slot="amount-value">
+              <RealtimeAmount
+                unknownTokenButton={false}
+                showFiatValue
+                showDelta={false}
+                timeline={stream.timeline}
+                tokenAddress={stream.config.amountPerSecond.tokenAddress}
+              />
+            </svelte:fragment>
+            <svelte:fragment slot="amount-sub">
+              {@const token =
+                $tokensStore &&
+                tokensStore.getByAddress(stream.config.amountPerSecond.tokenAddress)}
+              {#if token}
+                <div in:fade|global={{ duration: 300 }}>
+                  {STREAM_STATE_LABELS[streamState(stream)]} · {formatAmtPerSec(
+                    BigInt(stream.config.amountPerSecond.amount),
+                    token.info.decimals,
+                    token.info.symbol,
+                  )}
+                </div>
+              {:else}
+                <!-- Placeholder for right height during SSR -->
+                <span>⠀</span>
+              {/if}
+            </svelte:fragment>
+          </SupportItem>
+        {/if}
+        {#if item.__typename === 'DripListSupport'}
+          <SupportItem
+            href="/app/drip-lists/{item.dripList.account.accountId}"
+            title={{
+              component: DripListBadge,
+              props: {
+                isLinked: false,
+                avatarSize: 'tiny',
+                dripList: item.dripList,
+              },
+            }}
+            subtitle={formatDate(item.date)}
+          >
+            <svelte:fragment slot="amount-value">
+              <AggregateFiatEstimate amounts={item.totalSplit} />
+            </svelte:fragment>
+            <svelte:fragment slot="amount-sub">
+              Splits {getSplitPercent(item.weight, 'pretty')} of funds
+            </svelte:fragment>
+          </SupportItem>
+        {/if}
+        {#if item.__typename === 'ProjectSupport'}
+          {@const source = item.project.source}
+          <SupportItem
+            href={buildProjectUrl(source.forge, source.ownerName, source.repoName)}
+            title={{
+              component: ProjectBadge,
+              props: {
+                linkTo: 'nothing',
+                tooltip: false,
+                size: 'tiny',
+                project: item.project,
+                maxWidth: false,
+              },
+            }}
+            subtitle={formatDate(item.date)}
+          >
+            <svelte:fragment slot="amount-value">
+              <AggregateFiatEstimate amounts={item.totalSplit} />
+            </svelte:fragment>
+            <svelte:fragment slot="amount-sub">
+              Splits {getSplitPercent(item.weight, 'pretty')} of funds
+            </svelte:fragment>
+          </SupportItem>
+        {/if}
+      {/each}
+    </div>
+  </Section>
 </section>
 
 <style>
-  .lists {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .lists h5 {
-    color: var(--color-foreground-level-6);
-  }
-
-  .lists h5:not(:first-child) {
-    margin-top: 1rem;
-  }
-
-  .supporters-list {
+  .items {
     border: 1px solid var(--color-foreground);
     border-radius: 1rem 0 1rem 1rem;
     overflow: hidden;
-  }
-
-  .supporters-list .item {
-    padding: 1rem 1.5rem;
-    min-height: 4rem;
-    display: flex;
-    gap: 3rem;
-    align-items: center;
-    justify-content: space-between;
-    white-space: nowrap;
-    transition: background-color 0.3s;
-  }
-
-  .supporters-list .item.clickable:hover,
-  .supporters-list .item.clickable:focus-visible {
-    background-color: var(--color-primary-level-1);
-  }
-
-  .supporters-list .item:not(:last-child) {
-    border-bottom: 1px solid var(--color-foreground);
-  }
-
-  .muted {
-    color: var(--color-foreground-level-6);
-  }
-
-  .amount {
-    display: flex;
-    gap: 1rem;
-    align-items: center;
   }
 </style>

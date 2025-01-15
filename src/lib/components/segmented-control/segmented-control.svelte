@@ -1,12 +1,16 @@
-<script lang="ts">
+<script lang="ts" generics="T">
   import { browser } from '$app/environment';
-  import { createEventDispatcher, onMount, tick } from 'svelte';
+  import { createEventDispatcher } from 'svelte';
 
-  type T = $$Generic;
   type Option<V extends keyof T> = { title: string; value: V }[];
 
   export let options: Option<keyof T>;
   export let active: keyof T;
+  export let disabled: boolean = false;
+
+  export let containerRole = 'radiogroup';
+  export let itemRole = 'radio';
+  export let ariaLabel: string | undefined = undefined;
 
   const dispatch = createEventDispatcher<{ select: keyof T }>();
 
@@ -15,25 +19,19 @@
   let selectorWidth: number;
   let selectorOffset: number;
 
-  let initialRender = true;
+  let transition = false;
 
-  async function updateSelector() {
+  function updateSelector(shouldTransition = false) {
+    transition = shouldTransition;
+
     selectorOffset = (optionElems[active]?.offsetLeft ?? 4) - 4;
     selectorWidth = optionElems[active]?.offsetWidth ?? 0;
-
-    await tick();
-
-    initialRender = false;
   }
 
-  onMount(async () => {
-    updateSelector();
-  });
-
-  $: active && updateSelector();
+  $: active && updateSelector(true);
 
   let containerElem: HTMLDivElement | undefined;
-  let containerResizeObserver = browser ? new ResizeObserver(updateSelector) : undefined;
+  let containerResizeObserver = browser ? new ResizeObserver(() => updateSelector()) : undefined;
   $: containerElem && containerResizeObserver?.observe(containerElem);
 
   $: dispatch('select', active);
@@ -48,11 +46,12 @@
   }
 </script>
 
-<div class="segmented-control" bind:this={containerElem}>
-  <div class="options" role="radiogroup">
+<div class="segmented-control" class:disabled bind:this={containerElem}>
+  <div class="options" role={containerRole} aria-label={ariaLabel}>
     {#each options as option}
+      <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
       <div
-        role="radio"
+        role={itemRole}
         aria-checked={active === option.value}
         class="option typo-text"
         bind:this={optionElems[option.value]}
@@ -69,7 +68,7 @@
   </div>
   <div
     class="selector"
-    class:initial-render={initialRender}
+    class:transition
     class:at-beginning={options.findIndex((o) => o.value === active) === 0}
     class:at-end={options.findIndex((o) => o.value === active) === options.length - 1}
     style="transform: translateX({selectorOffset}px); width: {selectorWidth}px;"
@@ -84,6 +83,8 @@
     border-radius: 2rem 0 2rem 2rem;
     z-index: 0;
     user-select: none;
+    background-color: var(--color-background);
+    transition: opacity 0.3s;
   }
 
   .segmented-control .options {
@@ -113,11 +114,13 @@
     top: 0.25rem;
     bottom: 0.25rem;
     border-radius: 0.25rem;
-    transition: all 0.3s;
   }
 
-  .selector.initial-render {
-    transition: none;
+  .selector.transition {
+    transition:
+      transform 0.3s,
+      width 0.3s,
+      border-radius 0.3s;
   }
 
   .selector.at-beginning {
@@ -156,5 +159,10 @@
 
   .option:last-child .background {
     border-radius: 0.25rem 0 1rem 0.25rem;
+  }
+
+  .segmented-control.disabled {
+    opacity: 0.5;
+    pointer-events: none;
   }
 </style>

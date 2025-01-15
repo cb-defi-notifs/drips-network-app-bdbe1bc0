@@ -7,9 +7,9 @@
 
 <script lang="ts">
   import { createSvelteTable, flexRender, type TableOptions } from '@tanstack/svelte-table';
-  import ChevronDown from 'radicle-design-system/icons/ChevronDown.svelte';
-  import ChevronUp from 'radicle-design-system/icons/ChevronUp.svelte';
-  import InfoCircle from 'radicle-design-system/icons/InfoCircle.svelte';
+  import ChevronDown from '$lib/components/icons/ChevronDown.svelte';
+  import ChevronUp from '$lib/components/icons/ChevronUp.svelte';
+  import InfoCircle from '$lib/components/icons/InfoCircle.svelte';
   import { createEventDispatcher } from 'svelte';
   import Tooltip from '../tooltip/tooltip.svelte';
 
@@ -108,14 +108,15 @@
         bind:this={rowElems[index]}
       >
         {#each row.getVisibleCells() as cell}
+          {@const props = cell.getContext().getValue()}
           <td
             class:typo-text-bold={cell.column.getIsSorted()}
             class:sorted={cell.column.getIsSorted()}
           >
             <div>
               <svelte:component
-                this={flexRender(cell.column.columnDef.cell, cell.getContext())}
-                context={cell.getContext()}
+                this={flexRender(cell.column.columnDef.cell, props)}
+                {...typeof props === 'object' ? props : {}}
               />
             </div>
           </td>
@@ -148,6 +149,7 @@
     box-sizing: border-box;
     min-width: 100%;
     --border: 1px solid var(--color-foreground);
+    --first-cell-padding-left: 1.25rem;
   }
 
   .header {
@@ -176,6 +178,7 @@
 
   tbody > tr > td:first-child {
     border-left: var(--border);
+    padding-left: var(--first-cell-padding-left);
   }
 
   tbody > tr > td:last-child {
@@ -219,7 +222,7 @@
   }
 
   thead th:first-child {
-    padding-left: calc(0.75rem + 2px);
+    padding-left: var(--first-cell-padding-left);
   }
 
   thead th div {

@@ -1,206 +1,208 @@
 <script lang="ts" context="module">
-  export const EDIT_DRIP_LIST_STEP_SELECTED_DRIP_LIST_FRAGMENT = gql`
-    ${DRIP_LIST_MEMBERS_EDITOR_DRIP_LIST_FRAGMENT}
-    ${DRIP_LIST_MEMBERS_EDITOR_PROJECT_FRAGMENT}
-    fragment EditDripListStepSelectedDripList on DripList {
-      name
-      description
+  export const EDIT_DRIP_LIST_STEP_DRIP_LIST_TO_ADD_FRAGMENT = gql`
+    ${LIST_EDITOR_DRIP_LIST_FRAGMENT}
+    fragment EditDripListStepDripListToAdd on DripList {
+      ...ListEditorDripList
       account {
         accountId
       }
-      splits {
-        ... on DripListReceiver {
-          weight
-          account {
-            accountId
-          }
-          dripList {
-            ...DripListMembersEditorDripList
-          }
-        }
-        ... on AddressReceiver {
-          weight
-          account {
-            address
-          }
-        }
-        ... on ProjectReceiver {
-          weight
-          account {
-            accountId
-          }
-          project {
-            ...DripListMembersEditorProject
-          }
-        }
-      }
-    }
-  `;
-
-  export const EDIT_DRIP_LIST_STEP_DRIP_LIST_TO_ADD_FRAGMENT = gql`
-    ${DRIP_LIST_MEMBERS_EDITOR_DRIP_LIST_FRAGMENT}
-    fragment EditDripListStepDripListToAdd on DripList {
-      ...DripListMembersEditorDripList
     }
   `;
 
   export const EDIT_DRIP_LIST_STEP_PROJECT_TO_ADD_FRAGMENT = gql`
-    ${DRIP_LIST_MEMBERS_EDITOR_PROJECT_FRAGMENT}
+    ${LIST_EDITOR_PROJECT_FRAGMENT}
     fragment EditDripListStepProjectToAdd on Project {
-      ...DripListMembersEditorProject
+      ...ListEditorProject
+      account {
+        accountId
+      }
     }
   `;
 </script>
 
 <script lang="ts">
-  import mapFilterUndefined from '$lib/utils/map-filter-undefined';
   import StepLayout from '$lib/components/step-layout/step-layout.svelte';
   import StepHeader from '$lib/components/step-header/step-header.svelte';
   import Button from '$lib/components/button/button.svelte';
-  import Wallet from 'radicle-design-system/icons/Wallet.svelte';
-  import transact, { makeTransactPayload } from '$lib/components/stepper/utils/transact';
+  import Wallet from '$lib/components/icons/Wallet.svelte';
   import { createEventDispatcher } from 'svelte';
-  import type { StepComponentEvents } from '$lib/components/stepper/types';
-  import {
-    getCallerClient,
-    getNFTDriverClient,
-    getNFTDriverTxFactory,
-  } from '$lib/utils/get-drips-clients';
+  import { makeTransactPayload, type StepComponentEvents } from '$lib/components/stepper/types';
   import modal from '$lib/stores/modal';
   import NftDriverMetadataManager from '$lib/utils/metadata/NftDriverMetadataManager';
   import DripListService from '$lib/utils/driplist/DripListService';
   import assert from '$lib/utils/assert';
   import MetadataManagerBase from '$lib/utils/metadata/MetadataManagerBase';
-  import { Utils } from 'radicle-drips';
-  import projectItem from '$lib/components/drip-list-members-editor/item-templates/project';
-  import ethAddressItem from '$lib/components/drip-list-members-editor/item-templates/eth-address';
-  import dripListItem from '$lib/components/drip-list-members-editor/item-templates/drip-list';
   import type { nftDriverAccountMetadataParser } from '$lib/utils/metadata/schemas';
-  import DripListEditor, {
-    type DripListConfig,
-  } from '$lib/components/drip-list-editor/drip-list-editor.svelte';
+  import DripListEditor from '$lib/components/drip-list-editor/drip-list-editor.svelte';
   import type { Writable } from 'svelte/store';
-  import unreachable from '$lib/utils/unreachable';
   import { gql } from 'graphql-request';
   import type {
-  EditDripListStepDripListToAddFragment,
+    EditDripListStepDripListToAddFragment,
     EditDripListStepProjectToAddFragment,
-    EditDripListStepSelectedDripListFragment,
   } from './__generated__/gql.generated';
   import {
-    DRIP_LIST_MEMBERS_EDITOR_DRIP_LIST_FRAGMENT,
-    DRIP_LIST_MEMBERS_EDITOR_PROJECT_FRAGMENT,
-  } from '$lib/components/drip-list-members-editor/drip-list-members-editor.svelte';
+    LIST_EDITOR_DRIP_LIST_FRAGMENT,
+    LIST_EDITOR_PROJECT_FRAGMENT,
+    type Items,
+  } from '$lib/components/list-editor/types';
+  import ArrowDown from '$lib/components/icons/ArrowDown.svelte';
+  import importFromCsvSteps from '$lib/flows/import-from-csv/import-from-csv-steps';
+  import type { ListEditorItem, AccountId, Weights } from '$lib/components/list-editor/types';
+  import Emoji from '$lib/components/emoji/emoji.svelte';
+  import {
+    executeNftDriverWriteMethod,
+    populateNftDriverWriteTx,
+  } from '$lib/utils/sdk/nft-driver/nft-driver';
+  import { toBigInt } from 'ethers';
+  import keyValueToMetatada from '$lib/utils/sdk/utils/key-value-to-metadata';
+  import txToCallerCall from '$lib/utils/sdk/utils/tx-to-caller-call';
+  import { populateCallerWriteTx } from '$lib/utils/sdk/caller/caller';
+  import { formatSplitReceivers } from '$lib/utils/sdk/utils/format-split-receivers';
+  import invalidateAccountCache from '$lib/utils/cache/remote/invalidate-account-cache';
+  import { invalidateAll } from '$app/navigation';
+  import { waitForAccountMetadata } from '$lib/utils/ipfs';
 
   const dispatch = createEventDispatcher<StepComponentEvents>();
 
-  /** selectedDripListState must be fully populated before mounting this component */
-  export let selectedDripListState: Writable<{
-    dripList: EditDripListStepSelectedDripListFragment | undefined;
+  export let state: Writable<{
+    listEditorConfig: {
+      items: Items;
+      weights: Weights;
+    };
+    name: string;
+    description: string | undefined;
+    dripListAccountId: string | undefined;
+    isVisible: boolean;
   }>;
 
   export let projectToAdd: EditDripListStepProjectToAddFragment | undefined = undefined;
   export let dripListToAdd: EditDripListStepDripListToAddFragment | undefined = undefined;
 
-  let items = Object.fromEntries(
-    mapFilterUndefined($selectedDripListState.dripList?.splits ?? unreachable(), (rs) => {
-      if (rs.__typename === 'ProjectReceiver') {
-        return [rs.project.source.url, projectItem(rs.project)];
-      } else if (rs.__typename === 'AddressReceiver') {
-        return [rs.account.address, ethAddressItem(rs.account.address)];
-      } else if (rs.__typename === 'DripListReceiver') {
-        return [rs.dripList.account.accountId, dripListItem(rs.dripList)];
-      } else {
-        return undefined;
-      }
-    }),
-  );
-
-  const MAX_SPLITS_WEIGHT = 1000000;
-
-  function getSplitPercent(weight: number) {
-    return ((weight * MAX_SPLITS_WEIGHT) / MAX_SPLITS_WEIGHT / MAX_SPLITS_WEIGHT) * 100;
-  }
-
-  let percentages = Object.fromEntries(
-    mapFilterUndefined($selectedDripListState.dripList?.splits ?? unreachable(), (rs) => {
-      if (rs.__typename === 'ProjectReceiver') {
-        return [rs.project.source.url, getSplitPercent(rs.weight)];
-      } else if (rs.__typename === 'AddressReceiver') {
-        return [rs.account.address, getSplitPercent(rs.weight)];
-      } else if (rs.__typename === 'DripListReceiver') {
-        return [rs.dripList.account.accountId, getSplitPercent(rs.weight)];
-      } else {
-        return undefined;
-      }
-    }),
-  );
-
   if (projectToAdd) {
-    items[projectToAdd.source.url] = projectItem(projectToAdd);
+    $state.listEditorConfig.items[projectToAdd.account.accountId] = {
+      type: 'project',
+      project: projectToAdd,
+    };
+    $state.listEditorConfig.weights[projectToAdd.account.accountId] = 0;
   }
 
   if (dripListToAdd) {
-    items[dripListToAdd.account.accountId] = dripListItem(dripListToAdd);
+    $state.listEditorConfig.items[dripListToAdd.account.accountId] = {
+      type: 'drip-list',
+      dripList: dripListToAdd,
+    };
+    $state.listEditorConfig.weights[dripListToAdd.account.accountId] = 0;
   }
-
-  let dripList: DripListConfig = {
-    items,
-    percentages,
-    title: $selectedDripListState.dripList?.name ?? '',
-    description: $selectedDripListState.dripList?.description ?? undefined,
-  };
 
   let isValid = false;
 
   // TODO: Auto-refresh UI when splits change
   function submit() {
-    transact(
-      dispatch,
+    dispatch(
+      'transact',
       makeTransactPayload({
+        icon: {
+          component: Emoji,
+          props: { emoji: '✏️', size: 'huge' },
+        },
+        headline: 'Edit your Drip List',
         before: async () => {
-          const nftDriverTxFactory = await getNFTDriverTxFactory();
           const dripListService = await DripListService.new();
-          const callerClient = await getCallerClient();
 
           const { receivers, projectsSplitMetadata } =
-            await dripListService.getProjectsSplitMetadataAndReceivers(dripList);
+            await dripListService.getProjectsSplitMetadataAndReceivers(
+              $state.listEditorConfig.weights,
+              $state.listEditorConfig.items,
+            );
 
-          const listId = $selectedDripListState.dripList?.account.accountId ?? unreachable();
+          const listId = $state.dripListAccountId;
+          assert(listId, 'Drip List account ID is not set');
 
-          const setSplitsTx = await nftDriverTxFactory.setSplits(listId, receivers);
+          const setSplitsTx = await populateNftDriverWriteTx({
+            functionName: 'setSplits',
+            args: [toBigInt(listId), formatSplitReceivers(receivers)],
+          });
 
-          const nftDriverClient = await getNFTDriverClient();
-          const metadataManager = new NftDriverMetadataManager(nftDriverClient);
+          const metadataManager = new NftDriverMetadataManager(executeNftDriverWriteMethod);
 
           const currentMetadata = await metadataManager.fetchAccountMetadata(listId);
           assert(currentMetadata);
 
           const newMetadata: ReturnType<typeof nftDriverAccountMetadataParser.parseLatest> = {
             ...currentMetadata.data,
-            name: dripList.title,
-            description: dripList.description,
+            name: $state.name,
+            description: $state.description,
             projects: projectsSplitMetadata,
+            isVisible: $state.isVisible,
           };
 
           const hash = await metadataManager.pinAccountMetadata(newMetadata);
 
-          const metadataTx = await nftDriverTxFactory.emitAccountMetadata(
-            listId,
-            [
-              {
-                key: MetadataManagerBase.USER_METADATA_KEY,
-                value: hash,
-              },
-            ].map((m) => Utils.Metadata.createFromStrings(m.key, m.value)),
-          );
+          const metadataTx = await populateNftDriverWriteTx({
+            functionName: 'emitAccountMetadata',
+            args: [
+              toBigInt(listId),
+              [
+                {
+                  key: MetadataManagerBase.USER_METADATA_KEY,
+                  value: hash,
+                },
+              ].map(keyValueToMetatada),
+            ],
+          });
 
-          return { callerClient, setSplitsTx, metadataTx };
+          const tx = await populateCallerWriteTx({
+            functionName: 'callBatched',
+            args: [[setSplitsTx, metadataTx].map(txToCallerCall)],
+          });
+
+          return { tx, accountId: listId, ipfsHash: hash };
         },
 
-        transactions: ({ callerClient, setSplitsTx, metadataTx }) => ({
-          transaction: () => callerClient.callBatched([setSplitsTx, metadataTx]),
-        }),
+        transactions: ({ tx }) => [
+          {
+            transaction: tx,
+            applyGasBuffer: false,
+            title: 'Update your Drip List',
+          },
+        ],
+
+        after: async (_, { accountId, ipfsHash }) => {
+          await waitForAccountMetadata(accountId, ipfsHash, 'dripList');
+          await invalidateAccountCache(accountId);
+          await invalidateAll();
+        },
+      }),
+    );
+  }
+
+  function handleImportCSV() {
+    dispatch(
+      'sidestep',
+      importFromCsvSteps({
+        headline: 'Import recipients from CSV',
+        description:
+          'Your CSV file should simply be formatted by first listing the recipient, then listing the percentage allocation. For example:',
+        exampleTableCaption:
+          'A recipient can be a wallet address, GitHub repo URL, or Drip List URL. Maximum 200 recipients. Any previously configured recipients will be overwritten with the CSV contents.',
+        addItem(key: AccountId, item: ListEditorItem, weight: number | undefined) {
+          $state.listEditorConfig.items = {
+            ...$state.listEditorConfig.items,
+            [key]: item,
+          };
+
+          const MAX_WEIGHT = 1000000;
+
+          if (weight) {
+            $state.listEditorConfig.weights[key] = (weight * MAX_WEIGHT) / 100;
+          }
+        },
+        clearItems() {
+          $state.listEditorConfig = {
+            items: {},
+            weights: {},
+          };
+        },
       }),
     );
   }
@@ -212,11 +214,22 @@
     headline="Edit your Drip List"
     description="Choose which GitHub projects and Ethereum addresses you'd like to support with this Drip List."
   />
-  <DripListEditor bind:isValid bind:dripList />
+  <DripListEditor
+    bind:isValid
+    bind:name={$state.name}
+    bind:description={$state.description}
+    bind:weights={$state.listEditorConfig.weights}
+    bind:items={$state.listEditorConfig.items}
+    bind:isVisible={$state.isVisible}
+  >
+    <svelte:fragment slot="list-editor-action">
+      <Button variant="ghost" icon={ArrowDown} on:click={handleImportCSV}>Import from CSV</Button>
+    </svelte:fragment>
+  </DripListEditor>
   <svelte:fragment slot="actions">
     <Button on:click={modal.hide} variant="ghost">Cancel</Button>
     <Button on:click={submit} disabled={!isValid} icon={Wallet} variant="primary"
-      >Confirm changes in your wallet</Button
+      >Confirm changes</Button
     >
   </svelte:fragment>
 </StepLayout>

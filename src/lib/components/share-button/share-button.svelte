@@ -1,91 +1,68 @@
 <script lang="ts">
-  import { browser } from '$app/environment';
-  import LinkIcon from 'radicle-design-system/icons/Link.svelte';
-  import ShareIcon from 'radicle-design-system/icons/Sharrow.svelte';
-  import CopyIcon from 'radicle-design-system/icons/Copy.svelte';
-  import CheckCircle from 'radicle-design-system/icons/CheckCircle.svelte';
-  import { fade } from 'svelte/transition';
+  import ShareIcon from '$lib/components/icons/Sharrow.svelte';
+  import Button from '../button/button.svelte';
+  import { onMount, type ComponentProps } from 'svelte';
+  import modal from '$lib/stores/modal';
+  import shareSteps from '$lib/flows/share/share-steps';
+  import Stepper from '$lib/components/stepper/stepper.svelte';
 
   export let text: string | undefined = undefined;
   export let url: string;
+  export let disabled = false;
+  export let downloadableImageUrl: string = '';
+  export let shareModalText: string | undefined = undefined;
+  export let buttonVariant: ComponentProps<Button>['variant'] = 'ghost';
+  export let supportButtonOptions:
+    | Parameters<typeof shareSteps>[0]['supportButtonOptions']
+    | undefined = undefined;
 
-  let shareSupported = browser && navigator.share;
+  export let shareLabel = 'Share';
 
-  function handleClick() {
-    if (shareSupported) {
-      navigator.share({
-        text,
-        url,
-      });
-    } else {
-      // Copy URL to clipboard
-      navigator.clipboard.writeText(url);
-
-      copySuccess = true;
-      setTimeout(() => (copySuccess = false), 1000);
+  async function preloadImage(url: string) {
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+    } catch (error) {
+      // we don't really care to make a big fuss about this
+      // eslint-disable-next-line no-console
+      console.error('Error preloading image', error);
     }
   }
 
-  let hovering = false;
-  let copySuccess = false;
+  function handleClick() {
+    modal.show(
+      Stepper,
+      undefined,
+      shareSteps({
+        text,
+        url,
+        downloadableImageUrl,
+        shareModalText,
+        supportButtonOptions,
+      }),
+    );
+  }
+
+  onMount(() => {
+    if (downloadableImageUrl) {
+      preloadImage(downloadableImageUrl);
+    }
+  });
 </script>
 
-{#if shareSupported}
-  <button on:click={handleClick}>
+<Button {disabled} variant={buttonVariant} on:click={handleClick}>
+  <div class="button-inner">
     <ShareIcon style="fill:currentColor" />
-    Share
-  </button>
-{:else}
-  <button
-    on:mouseenter={() => (hovering = true)}
-    on:focus={() => (hovering = true)}
-    on:mouseleave={() => (hovering = false)}
-    on:blur={() => (hovering = false)}
-    on:click={handleClick}
-    class:copy-success={copySuccess}
-  >
-    <div class="icon">
-      {#if copySuccess}
-        <span transition:fade|local={{ duration: 200 }}>
-          <CheckCircle style="fill: var(--color-positive)" />
-        </span>
-      {:else if hovering}
-        <span transition:fade|local={{ duration: 200 }}>
-          <CopyIcon style="fill: var(--color-primary-level-6)" />
-        </span>
-      {:else}
-        <span transition:fade|local={{ duration: 200 }}
-          ><LinkIcon style="fill: currentColor" /></span
-        >
-      {/if}
-    </div>
-    Copy link
-  </button>
-{/if}
+    {shareLabel}
+  </div>
+</Button>
 
 <style>
-  button {
+  .button-inner {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
-  }
-
-  button .icon {
-    height: 2rem;
-    width: 2rem;
-    display: inline-flex;
-    justify-content: center;
-    align-items: center;
-    position: relative;
-    border-radius: 1rem;
-  }
-
-  button .icon > * {
-    position: absolute;
-  }
-
-  button:hover:not(.copy-success) .icon,
-  button:focus-visible:not(.copy-success) .icon {
-    background-color: var(--color-primary-level-1);
+    gap: 0.125rem;
+    margin-left: -0.25rem;
   }
 </style>

@@ -1,116 +1,55 @@
-<script context="module" lang="ts">
-  export type StreamState = 'scheduled' | 'paused' | 'active' | 'ended' | 'out-of-funds';
+<script lang="ts" context="module">
+  import { gql } from 'graphql-request';
+
+  export const STREAM_STATE_BADGE_STREAM_FRAGMENT = gql`
+    ${STREAM_STATE_STREAM_FRAGMENT}
+    fragment StreamStateBadgeStream on Stream {
+      ...StreamStateStream
+      config {
+        amountPerSecond {
+          tokenAddress
+        }
+      }
+    }
+  `;
 </script>
 
 <script lang="ts">
-  import balances from '$lib/stores/balances/balances.store';
-  import streams from '$lib/stores/streams';
-  import type { StreamId } from '$lib/stores/streams/types';
-  import getStreamHistory from '$lib/utils/stream-history';
-  import unreachable from '$lib/utils/unreachable';
+  import streamState, {
+    STREAM_STATE_LABELS,
+    STREAM_STATE_STREAM_FRAGMENT,
+  } from '$lib/utils/stream-state';
+  import StatusBadge from '../status-badge/status-badge.svelte';
+  import type { StreamStateBadgeStreamFragment } from './__generated__/gql.generated';
+  import { streamCurrentAmountsStore } from '$lib/utils/current-amounts';
 
-  export let streamId: StreamId;
-  export let paused: boolean;
-  export let durationSeconds: number | undefined = undefined;
-  export let startDate: Date | undefined = undefined;
-  export let senderId: string;
-  export let tokenAddress: string;
+  export let stream: StreamStateBadgeStreamFragment;
 
   export let hideActive = false;
   export let size: 'small' | 'normal' | 'large' = 'normal';
 
-  $: assetConfig = $streams && streams.getAssetConfig(senderId, tokenAddress);
-  $: streamHistory = assetConfig ? getStreamHistory(assetConfig, streamId) : undefined;
+  const streamReadable = streamCurrentAmountsStore(
+    stream.timeline,
+    stream.config.amountPerSecond.tokenAddress,
+  );
 
-  $: estimate = $balances && balances.getEstimateByStreamId(streamId);
-  $: streamScheduledStart = startDate;
-  $: streamCreated = streamHistory?.[0].timestamp;
-  $: streamStartDate = new Date(streamScheduledStart ?? streamCreated ?? unreachable());
-  $: streamEndDate = durationSeconds
-    ? new Date(streamStartDate.getTime() + durationSeconds * 1000)
-    : undefined;
-
-  let state: StreamState | undefined;
-  $: {
-    if (estimate) {
-      if (paused) {
-        state = 'paused';
-      } else if (streamEndDate && streamEndDate.getTime() < new Date().getTime()) {
-        state = 'ended';
-      } else if (startDate && startDate.getTime() > new Date().getTime()) {
-        state = 'scheduled';
-      } else if (estimate.currentAmountPerSecond === 0n) {
-        state = 'out-of-funds';
-      } else if (estimate.currentAmountPerSecond > 0n) {
-        state = 'active';
-      }
-    }
-  }
+  // listen to updates of the stream's current realtime state and update the state
+  $: state = $streamReadable && streamState(stream);
 
   const colorMap = {
-    paused: 'color-caution',
-    active: 'color-positive',
-    ended: 'color-foreground',
-    scheduled: 'color-caution',
-    'out-of-funds': 'color-negative',
+    paused: 'caution',
+    active: 'positive',
+    ended: 'foreground',
+    scheduled: 'caution',
+    'out-of-funds': 'negative',
   } as const;
-  $: stateColor = state ? colorMap[state] : undefined;
+  $: color = state ? colorMap[state] : undefined;
 
-  const stateLabels = {
-    paused: 'Paused',
-    active: 'Active',
-    ended: 'Ended',
-    scheduled: 'Scheduled',
-    'out-of-funds': 'Out of funds',
-  } as const;
-  $: stateLabel = state ? stateLabels[state] : undefined;
-
-  const textClasses = {
-    small: 'typo-text-small',
-    normal: 'typo-text',
-    large: 'typo-header-3',
-  };
+  $: stateLabel = state ? STREAM_STATE_LABELS[state] : undefined;
 </script>
 
 {#if state && !(state === 'active' && hideActive)}
-  <div class="stream-state-badge {size}" style:background-color={`var(--${stateColor}-level-1`}>
-    <div class="dot" style:background-color={`var(--${stateColor}-level-6`} />
-    <span class={textClasses[size]} style:color={`var(--${stateColor}-level-6`}>{stateLabel}</span>
-  </div>
+  <StatusBadge {size} {color}>
+    {stateLabel}
+  </StatusBadge>
 {/if}
-
-<style>
-  .stream-state-badge {
-    height: 2rem;
-    border-radius: 2rem 0 2rem 2rem;
-    display: flex;
-    gap: 0.5rem;
-    padding: 0 0.75rem;
-    align-items: center;
-    user-select: none;
-    max-width: fit-content;
-  }
-
-  .stream-state-badge.small {
-    height: 1.5rem;
-    padding: 0 0.5rem;
-    gap: 0.375rem;
-  }
-
-  .stream-state-badge.large {
-    height: 3rem;
-    padding: 0 1rem;
-    gap: 0.5rem;
-  }
-
-  .dot {
-    height: 0.5rem;
-    width: 0.5rem;
-    border-radius: 0.25rem;
-  }
-
-  .small .dot {
-    height: 0.375rem;
-    width: 0.375rem;
-  }
-</style>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import HamburgerIcon from 'radicle-design-system/icons/Hamburger.svelte';
+  import HamburgerIcon from '$lib/components/icons/Hamburger.svelte';
   export let dragging = false;
 </script>
 
@@ -15,7 +15,9 @@
     width: 24px;
     background-color: var(--color-primary);
     border-radius: 12px 12px 12px 0;
-    box-shadow: -1px 1px 0 1px var(--color-foreground), 0px 0px 0 1px var(--color-foreground);
+    box-shadow:
+      -1px 1px 0 1px var(--color-foreground),
+      0px 0px 0 1px var(--color-foreground);
     cursor: grab;
     transform: rotate(-45deg);
     display: flex;

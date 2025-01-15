@@ -1,6 +1,6 @@
 import NftDriverMetadataManager from '../NftDriverMetadataManager';
 import mapFilterUndefined from '$lib/utils/map-filter-undefined';
-import type { LatestVersion } from '@efstajas/versioned-parser/lib/types';
+import type { LatestVersion } from '@efstajas/versioned-parser';
 import type { nftDriverAccountMetadataParser } from '../schemas';
 import unreachable from '$lib/utils/unreachable';
 
@@ -24,6 +24,7 @@ describe('NftDriverMetadataManager', () => {
 
       const context = {
         forAccountId: '1',
+        isVisible: false,
         projects: [
           {
             weight: 1,
@@ -49,6 +50,7 @@ describe('NftDriverMetadataManager', () => {
           accountId: '1',
         },
         isDripList: true,
+        isVisible: false,
         projects: mapFilterUndefined(context.projects, (listProj) => ({
           accountId: '1',
           weight: listProj.weight,

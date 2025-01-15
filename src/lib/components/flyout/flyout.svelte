@@ -3,12 +3,23 @@
   import { fly } from 'svelte/transition';
 
   export let direction: 'left' | 'right' = 'left';
+  export let width = '24rem';
 
-  let visible = false;
+  export let visible = false;
   let triggerElem: HTMLDivElement;
 
+  let timerId: NodeJS.Timeout;
+
   function handleHover(hovering: boolean) {
-    visible = hovering;
+    clearTimeout(timerId);
+
+    if (hovering) {
+      visible = true;
+    } else {
+      timerId = setTimeout(() => {
+        visible = false;
+      }, 250);
+    }
   }
 
   function handleFocusChange(e: FocusEvent) {
@@ -34,6 +45,7 @@
     on:mouseenter={() => handleHover(true)}
     on:mouseleave={() => handleHover(false)}
   >
+    <!-- svelte-ignore a11y-no-static-element-interactions -->
     <div
       class="trigger-content"
       on:keydown={() => handleHover(true)}
@@ -42,7 +54,7 @@
       <slot name="trigger" />
     </div>
     {#if visible}
-      <div transition:fly|local={{ y: 8 }} class="content" class:left={direction === 'left'}>
+      <div transition:fly={{ y: 8 }} class="content" class:left={direction === 'left'} style:width>
         <div class="margin" />
         <div class="wrapper">
           <slot name="content" />
@@ -69,7 +81,6 @@
     position: absolute;
     z-index: 3;
     left: 0;
-    width: 24rem;
     max-width: calc(100vw - 2rem);
   }
 

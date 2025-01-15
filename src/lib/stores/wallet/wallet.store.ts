@@ -1,31 +1,32 @@
-import { ethers } from 'ethers';
-import type { Network } from '@ethersproject/networks';
+import { JsonRpcProvider, JsonRpcSigner } from 'ethers';
 import { get, writable } from 'svelte/store';
 import { browser } from '$app/environment';
-import { AddressDriverClient } from 'radicle-drips';
 import Onboard, { type EIP1193Provider } from '@web3-onboard/core';
 import injectedWallets from '@web3-onboard/injected-wallets';
 import walletConnectModule from '@web3-onboard/walletconnect';
 
 import testnetMockProvider from './__test__/local-testnet-mock-provider';
 import isTest from '$lib/utils/is-test';
-import { getAddressDriverClient } from '$lib/utils/get-drips-clients';
 import globalAdvisoryStore from '../global-advisory/global-advisory.store';
 
-import SafeAppsSDK from '$lib/stores/wallet/safe/sdk';
+import SafeAppsSDK from '@safe-global/safe-apps-sdk';
 import { SafeAppProvider } from '@safe-global/safe-apps-provider';
 import isRunningInSafe from '$lib/utils/is-running-in-safe';
 import storedWritable from '@efstajas/svelte-stored-writable';
 import { z } from 'zod';
 import { isWalletUnlocked } from './utils/is-wallet-unlocked';
-import network, { isConfiguredChainId } from './network';
+import network, { getNetwork, isConfiguredChainId, type Network } from './network';
+import { invalidateAll } from '../fetched-data-cache/invalidate';
+import { BrowserProvider } from 'ethers';
+import unreachable from '$lib/utils/unreachable';
+import type { OxString } from '$lib/utils/sdk/sdk-types';
+import { executeAddressDriverReadMethod } from '$lib/utils/sdk/address-driver/address-driver';
+import FailoverJsonRpcProvider from '$lib/utils/FailoverJsonRpcProvider';
+import mapFilterUndefined from '$lib/utils/map-filter-undefined';
 
 const appsSdk = new SafeAppsSDK();
 
-const DEFAULT_NETWORK: Network = {
-  chainId: network.chainId,
-  name: network.name,
-};
+const DEFAULT_NETWORK: Network = network;
 
 const injected = injectedWallets();
 
@@ -36,6 +37,7 @@ const onboard = Onboard({
       version: 2,
       projectId: 'c09f5d8545d67c604ccf454219fd8f4d',
       requiredChains: [network.chainId],
+      dappUrl: 'https://drips.network',
     }),
   ],
   chains: [
@@ -73,8 +75,8 @@ export interface ConnectedWalletStoreState {
   connected: true;
   address: string;
   dripsAccountId: string;
-  provider: ethers.providers.Web3Provider | ethers.providers.JsonRpcProvider;
-  signer: ethers.providers.JsonRpcSigner;
+  provider: BrowserProvider | JsonRpcProvider | FailoverJsonRpcProvider;
+  signer: JsonRpcSigner;
   network: Network;
   safe?: SafeInfo;
 }
@@ -82,10 +84,7 @@ export interface ConnectedWalletStoreState {
 export interface DisconnectedWalletStoreState {
   connected: false;
   network: Network;
-  provider:
-    | ethers.providers.Web3Provider
-    | ethers.providers.InfuraProvider
-    | ethers.providers.JsonRpcProvider;
+  provider: BrowserProvider | JsonRpcProvider | FailoverJsonRpcProvider;
   dripsAccountId?: undefined;
   address?: undefined;
   signer?: undefined;
@@ -94,12 +93,17 @@ export interface DisconnectedWalletStoreState {
 
 type WalletStoreState = ConnectedWalletStoreState | DisconnectedWalletStoreState;
 
-const initNetwork = DEFAULT_NETWORK;
-
 const INITIAL_STATE: DisconnectedWalletStoreState = {
   connected: false,
-  network: initNetwork,
-  provider: new ethers.providers.InfuraProvider(initNetwork, network.infuraKey),
+  network: DEFAULT_NETWORK,
+  provider: new FailoverJsonRpcProvider(
+    mapFilterUndefined([network.rpcUrl, network.fallbackRpcUrl], (url) => url),
+    {
+      chainId: network.chainId,
+      name: network.name,
+      ensAddress: network.ensAddress,
+    },
+  ),
 };
 
 const walletStore = () => {
@@ -168,12 +172,12 @@ const walletStore = () => {
       });
     }, 2000);
 
-    let provider: ethers.providers.Web3Provider;
+    let provider: BrowserProvider;
     let safeInfo: SafeInfo | undefined;
 
     if (isSafeApp) {
       safeInfo = await appsSdk.safe.getInfo();
-      provider = new ethers.providers.Web3Provider(new SafeAppProvider(safeInfo, appsSdk));
+      provider = new BrowserProvider(new SafeAppProvider(safeInfo, appsSdk));
     } else {
       waitingForOnboard.set(true);
       const wallets = await onboard.connectWallet(onboardOptions);
@@ -187,7 +191,7 @@ const walletStore = () => {
 
       lastConnectedWallet.set(walletName);
 
-      provider = new ethers.providers.Web3Provider(wallets[0].provider);
+      provider = new BrowserProvider(wallets[0].provider);
       _attachListeners(wallets[0].provider);
     }
 
@@ -196,19 +200,72 @@ const walletStore = () => {
 
     const connectedToNetwork = await provider.getNetwork();
 
-    if (!isConfiguredChainId(connectedToNetwork.chainId)) {
-      const clearAdvisory = globalAdvisoryStore.add({
-        fatal: false,
-        headline: 'Unsupported network',
-        description: `Please switch your connected wallet to ${network.label}.`,
-        emoji: '🔌',
-      });
+    if (!isConfiguredChainId(Number(connectedToNetwork.chainId))) {
+      // Try connecting to the default network to see if the network is already added.
+      try {
+        await provider.send('wallet_switchEthereumChain', [
+          { chainId: `0x${DEFAULT_NETWORK.chainId.toString(16)}` },
+        ]);
+        // Network is already added, we can proceed.
+        await _setConnectedState(provider, safeInfo);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } catch (error: any) {
+        // Error code 4902 means that the network is not added to the wallet.
+        if (error.error?.code === 4902) {
+          // In this case, we also show the option to add the network to the wallet.
+          clearAdvisory = globalAdvisoryStore.add({
+            fatal: false,
+            headline: 'Unsupported network',
+            description: `Please add ${network.label} network to your connected wallet and switch to it, or disconnect the wallet.`,
+            emoji: '🔌',
+            button: {
+              label: 'Disconnect wallet',
+              handler: () => {
+                disconnect();
+                clearAdvisory?.();
+              },
+            },
+            secondaryButton: {
+              label: `Add ${network.label} to wallet`,
+              handler: async () => {
+                await provider.send('wallet_addEthereumChain', [
+                  {
+                    chainId: '0x13a',
+                    blockExplorerUrls: ['https://filecoin.blockscout.com/'],
+                    chainName: 'Filecoin',
+                    nativeCurrency: {
+                      decimals: 18,
+                      name: 'Filecoin',
+                      symbol: 'FIL',
+                    },
+                    rpcUrls: [
+                      'https://api.node.glif.io/rpc/v1',
+                      'https://filecoin.chainup.net/rpc/v1',
+                      'https://rpc.ankr.com/filecoin',
+                    ],
+                  },
+                ]);
 
-      await provider.send('wallet_switchEthereumChain', [
-        { chainId: `0x${DEFAULT_NETWORK.chainId.toString(16)}` },
-      ]);
-
-      clearAdvisory();
+                clearAdvisory?.();
+              },
+            },
+          });
+        } else {
+          clearAdvisory = globalAdvisoryStore.add({
+            fatal: false,
+            headline: 'Unsupported network',
+            description: `Please switch your connected wallet to ${network.label}, or disconnect the wallet.`,
+            emoji: '🔌',
+            button: {
+              label: 'Disconnect wallet',
+              handler: () => {
+                disconnect();
+                clearAdvisory?.();
+              },
+            },
+          });
+        }
+      }
     }
 
     await _setConnectedState(provider, safeInfo);
@@ -225,22 +282,28 @@ const walletStore = () => {
     _clear();
   }
 
-  async function _setConnectedState(
-    provider: ethers.providers.Web3Provider,
-    safeInfo?: SafeInfo,
-  ): Promise<void> {
+  async function _setConnectedState(provider: BrowserProvider, safeInfo?: SafeInfo): Promise<void> {
     const accounts = await provider.listAccounts();
-    const signer = provider.getSigner();
+    const signer = await provider.getSigner();
 
     state.set({
       connected: true,
-      address: accounts[0],
-      dripsAccountId: await (await AddressDriverClient.create(provider, signer)).getAccountId(),
+      address: accounts[0].address,
+      dripsAccountId: (
+        await executeAddressDriverReadMethod({
+          functionName: 'calcAccountId',
+          args: [signer.address as OxString],
+        })
+      ).toString(),
       provider,
       signer,
-      network: await provider.getNetwork(),
+      network: getNetwork(Number((await provider.getNetwork()).chainId)),
       safe: safeInfo,
     });
+
+    if (browser) {
+      await invalidateAll();
+    }
   }
 
   function _clear() {
@@ -279,8 +342,8 @@ const walletStore = () => {
 };
 
 const mockWalletStore = () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const address =
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (browser && (window as any))?.playwrightAddress ?? '0x433220a86126eFe2b8C98a723E73eBAd2D0CbaDc';
   const provider = testnetMockProvider(address);
   const initialized = writable(false);
@@ -288,22 +351,29 @@ const mockWalletStore = () => {
 
   const state = writable<WalletStoreState>({
     connected: false,
-    network: provider.network,
+    network: getNetwork(Number(provider._network.chainId)),
     provider,
   });
 
   async function initialize() {
-    const signer = provider.getSigner();
+    const signer = await provider.getSigner();
 
-    const accountId = await (await getAddressDriverClient(signer)).getAccountId();
+    const ownAccountId = (
+      await executeAddressDriverReadMethod({
+        functionName: 'calcAccountId',
+        args: [signer.address as OxString],
+      })
+    ).toString();
+
+    const chainId = Number((await provider.getNetwork()).chainId ?? unreachable());
 
     state.set({
       connected: true,
       address,
       provider,
       signer,
-      network: provider.network,
-      dripsAccountId: accountId,
+      network: getNetwork(chainId),
+      dripsAccountId: ownAccountId,
     });
 
     initialized.set(true);
@@ -320,5 +390,4 @@ const mockWalletStore = () => {
   };
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export default isTest() ? mockWalletStore() : walletStore();

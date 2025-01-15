@@ -1,14 +1,17 @@
 <script lang="ts">
-  import tokensStore from '$lib/stores/tokens/tokens.store';
-  import fiatEstimates from '$lib/utils/fiat-estimates/fiat-estimates';
+  import fiatEstimates, { type Prices } from '$lib/utils/fiat-estimates/fiat-estimates';
   import { fade } from 'svelte/transition';
-  import WarningIcon from 'radicle-design-system/icons/ExclamationCircle.svelte';
+  import WarningIcon from '$lib/components/icons/ExclamationCircle.svelte';
   import Tooltip from '../tooltip/tooltip.svelte';
   import FiatEstimateValue from './fiat-estimate-value.svelte';
+  import aggregateFiatEstimate from './aggregate-fiat-estimate';
+  import { createEventDispatcher } from 'svelte';
+  import { readable } from 'svelte/store';
 
+  const dispatch = createEventDispatcher<{ loaded: void }>();
   interface Amount {
     tokenAddress: string;
-    amount: bigint;
+    amount: bigint | string;
   }
 
   type Amounts = Amount[];
@@ -17,61 +20,50 @@
   export let amounts: Amounts | undefined;
   $: tokenAddresses = amounts?.map((a) => a.tokenAddress);
 
+  export let supressUnknownAmountsWarning = false;
+
   const fiatEstimatesStarted = fiatEstimates.started;
   $: {
-    if ($fiatEstimatesStarted && tokenAddresses && tokenAddresses.length > 0) {
+    if ($fiatEstimatesStarted && tokenAddresses && tokenAddresses.length > 0 && !prices) {
       fiatEstimates.track(tokenAddresses);
     }
   }
 
-  $: priceStore = fiatEstimates.price(tokenAddresses ?? []);
+  /**
+    Pass prices if they've been fetched externally already (e.g. in a load function).
+    If undefined, it will call in and wait for prices from `fiatEstimates` store.
 
-  let fiatEstimateCents: number | 'pending' = 'pending';
+    If you do pass prices, make sure that there's a value for each token address included in `amounts`.
+  */
+  export let prices: Prices | undefined = undefined;
+  $: priceStore = prices ? readable(prices) : fiatEstimates.price(tokenAddresses ?? []);
+
+  export let fiatEstimateCents: number | 'pending' = 'pending';
   let includesUnknownPrice = false;
 
-  const connected = tokensStore.connected;
-
   $: {
-    if ($connected && amounts && $connected) {
-      const prices = $priceStore;
+    if (amounts) {
+      const result = aggregateFiatEstimate($priceStore, amounts);
 
-      includesUnknownPrice = false;
-
-      if (Object.values(prices).includes('pending')) {
-        fiatEstimateCents = 'pending';
-      } else {
-        fiatEstimateCents = amounts.reduce((sum, { tokenAddress, amount }) => {
-          const token = tokensStore.getByAddress(tokenAddress);
-
-          if (!token) {
-            includesUnknownPrice = true;
-            return sum;
-          }
-
-          const res = fiatEstimates.convert({ amount, tokenAddress }, token.info.decimals);
-
-          if (res === 'unsupported') {
-            includesUnknownPrice = true;
-            return sum;
-          }
-
-          if (!res || res === 'pending') {
-            return sum;
-          }
-
-          return sum + res;
-        }, 0);
+      if (fiatEstimateCents === 'pending' && typeof result.fiatEstimateCents === 'number') {
+        dispatch('loaded');
       }
+
+      includesUnknownPrice = result.includesUnknownPrice;
+      fiatEstimateCents = result.fiatEstimateCents;
     }
   }
 </script>
 
 <div class="aggregate-fiat-estimate">
-  <FiatEstimateValue forceLoading={amounts === undefined} {fiatEstimateCents} />
-  {#if includesUnknownPrice && fiatEstimateCents !== 'pending'}
-    <div class="warning" transition:fade|local={{ duration: 100 }}>
+  <FiatEstimateValue
+    forceLoading={amounts === undefined && typeof fiatEstimateCents !== 'number'}
+    {fiatEstimateCents}
+  />
+  {#if includesUnknownPrice && fiatEstimateCents !== 'pending' && !supressUnknownAmountsWarning}
+    <div class="warning" transition:fade={{ duration: 100 }}>
       <Tooltip>
-        <WarningIcon style="fill: var(--color-negative)" />
+        <WarningIcon />
         <svelte:fragment slot="tooltip-content">
           This amount includes unknown tokens for which we couldnʼt determine a current USD value.
         </svelte:fragment>

@@ -1,7 +1,13 @@
 <script lang="ts">
   import { fly } from 'svelte/transition';
   import { createEventDispatcher, onDestroy, onMount, tick } from 'svelte';
-  import type { AwaitPendingPayload, Steps, MovePayload, SidestepPayload } from './types';
+  import type {
+    AwaitPendingPayload,
+    Steps,
+    MovePayload,
+    SidestepPayload,
+    SomeTransactPayload,
+  } from './types';
   import { tweened } from 'svelte/motion';
   import { cubicInOut } from 'svelte/easing';
   import AwaitStep, { type Result } from './components/await-step.svelte';
@@ -9,8 +15,9 @@
   import type { Writable } from 'svelte/store';
   import modal from '$lib/stores/modal';
   import { browser } from '$app/environment';
+  import TransactStep from './components/transact-step.svelte';
 
-  const dispatch = createEventDispatcher<{ stepChange: never }>();
+  const dispatch = createEventDispatcher<{ stepChange: void }>();
 
   export let steps: Steps;
   export let context: (() => Writable<unknown>) | undefined = undefined;
@@ -38,6 +45,28 @@
     prevStepIndex = currentStepIndex;
   }
 
+  function nextValidStepIndex(startIndex: number, direction: 'forward' | 'backward') {
+    let index = startIndex;
+
+    while (true) {
+      if (index < 0 || index >= resolvedSteps.length) {
+        return startIndex;
+      }
+
+      const condition = resolvedSteps[index].condition?.();
+
+      if (condition === undefined || condition === true) {
+        return index;
+      }
+
+      if (direction === 'forward') {
+        index++;
+      } else {
+        index--;
+      }
+    }
+  }
+
   /**
    * Advances `by` amount of steps in the flow (or goes backwards with a negative number).
    * Resolves when the step transition has concluded fully.
@@ -46,11 +75,9 @@
   async function move(by: number) {
     dispatch('stepChange');
 
-    if (!resolvedSteps[currentStepIndex + by]) {
-      return;
-    }
+    const direction = by > 0 ? 'forward' : 'backward';
 
-    currentStepIndex += by;
+    currentStepIndex = nextValidStepIndex(currentStepIndex + by, direction);
 
     // Wait for the old step to be fully out of view and unmounted.
     return new Promise<void>((resolve) => (transitionEndListener = resolve));
@@ -113,14 +140,18 @@
     firstHeightUpdate = false;
   }
 
-  let awaiting: AwaitPendingPayload | undefined;
-  let awaitError: Error | undefined;
-
   function handleGoForward(event: CustomEvent<MovePayload>) {
     move(event.detail?.by ?? 1);
   }
 
+  let awaiting: AwaitPendingPayload | undefined;
+  let awaitError: Error | undefined;
+
   function handleAwait(event: CustomEvent<AwaitPendingPayload>) {
+    if (transacting) {
+      throw new Error('Cannot await while transacting.');
+    }
+
     direction = 'forward';
     awaiting = event.detail;
   }
@@ -140,6 +171,34 @@
     awaitError = undefined;
   }
 
+  let transacting: SomeTransactPayload | undefined;
+
+  function handleTransact(event: CustomEvent<SomeTransactPayload>) {
+    if (awaiting) {
+      throw new Error('Cannot transact while awaiting.');
+    }
+
+    direction = 'forward';
+    transacting = event.detail;
+  }
+
+  function handleTransactResult(event: CustomEvent<Result>) {
+    if (event.detail.success) {
+      move(1);
+    } else {
+      // Handling transact errors as await errors.
+      awaitError = event.detail.error;
+    }
+
+    transacting = undefined;
+  }
+
+  function handleTransactStartOver() {
+    direction = 'backward';
+    transacting = undefined;
+    move(0);
+  }
+
   let sidestepConfig: SidestepPayload | undefined = undefined;
   let originalSteps: Steps | undefined = undefined;
   let originalStepIndex: number | undefined = undefined;
@@ -155,6 +214,9 @@
     */
     internalSteps = [steps[currentStepIndex], ...event.detail.steps];
     currentStepIndex = 0;
+    // move relies on resolvedSteps, so allow that computed property
+    // to update
+    await tick();
 
     // Animate to the first side-step
     await move(1);
@@ -205,6 +267,7 @@
     currentStep;
     awaitError;
     awaiting;
+    transacting;
     updateMutationObserver();
   }
 
@@ -223,10 +286,10 @@
   style:height={`${$wrapperHeight}px`}
   style:overflow={transitioning ? 'hidden' : 'visible'}
 >
-  {#key `${awaiting}${awaitError}${currentStepIndex}`}
+  {#key `${awaiting}${transacting}${awaitError}${currentStepIndex}`}
     <div
-      in:fly|local={(() => getTransition('in'))()}
-      out:fly|local={(() => getTransition('out'))()}
+      in:fly={(() => getTransition('in'))()}
+      out:fly={(() => getTransition('out'))()}
       on:outrostart={() => setTransitioning(true)}
       on:introend={() => setTransitioning(false)}
       class="step-wrapper"
@@ -236,10 +299,17 @@
           <AwaitStep {...awaiting} on:result={handleAwaitResult} />
         {:else if awaitError}
           <AwaitErrorStep message={awaitError.message} on:retry={handleAwaitErrorRetry} />
+        {:else if transacting}
+          <TransactStep
+            transactPayload={transacting}
+            on:result={handleTransactResult}
+            on:startOver={handleTransactStartOver}
+          />
         {:else}
           <svelte:component
             this={currentStep.component}
             on:await={handleAwait}
+            on:transact={handleTransact}
             on:goForward={handleGoForward}
             on:goBackward={(e) => move(e.detail?.by ?? -1)}
             on:conclude={handleConclusion}

@@ -1,10 +1,19 @@
-import type { ClaimedProject } from '$lib/graphql/__generated__/base-types';
+import query from '$lib/graphql/dripsQL';
 import type { PickGQLF } from '$lib/graphql/utils/pick-gql-fields';
-import RepoDriverUtils from '../RepoDriverUtils';
-import { getRepoDriverClient } from '../get-drips-clients';
+import { gql } from 'graphql-request';
 import MetadataManagerBase from './MetadataManagerBase';
 import { repoDriverAccountMetadataParser } from './schemas';
-import type { AnyVersion, LatestVersion } from '@efstajas/versioned-parser/lib/types';
+import type { AnyVersion, LatestVersion } from '@efstajas/versioned-parser';
+import type {
+  LatestProjectMetadataHashQuery,
+  LatestProjectMetadataHashQueryVariables,
+} from './__generated__/gql.generated';
+import { Forge, type OxString } from '../sdk/sdk-types';
+import { hexlify, toUtf8Bytes } from 'ethers';
+import { executeRepoDriverReadMethod } from '../sdk/repo-driver/repo-driver';
+import filterCurrentChainData from '../filter-current-chain-data';
+import type { ClaimedProjectData, Project } from '$lib/graphql/__generated__/base-types';
+import network from '$lib/stores/wallet/network';
 
 type AccountId = string;
 
@@ -13,6 +22,44 @@ export default class RepoDriverMetadataManager extends MetadataManagerBase<
 > {
   constructor() {
     super(repoDriverAccountMetadataParser);
+  }
+
+  public async fetchMetadataHashByAccountId(accountId: string): Promise<string | null> {
+    const res = await query<
+      LatestProjectMetadataHashQuery,
+      LatestProjectMetadataHashQueryVariables
+    >(
+      gql`
+        query LatestProjectMetadataHash($accountId: ID!, $chains: [SupportedChain!]) {
+          projectById(id: $accountId, chains: $chains) {
+            chainData {
+              ... on ClaimedProjectData {
+                __typename
+                chain
+                latestMetadataIpfsHash
+              }
+              ... on UnClaimedProjectData {
+                __typename
+                chain
+              }
+            }
+          }
+        }
+      `,
+      { accountId, chains: [network.gqlName] },
+    );
+
+    if (!res.projectById) {
+      return null;
+    }
+
+    const projectChainData = filterCurrentChainData(res.projectById.chainData);
+
+    if (projectChainData.__typename === 'ClaimedProjectData') {
+      return projectChainData.latestMetadataIpfsHash;
+    }
+
+    return null;
   }
 
   /**
@@ -32,13 +79,12 @@ export default class RepoDriverMetadataManager extends MetadataManagerBase<
 
     const { url, repoName, ownerName, forge } = metadata.data.source;
 
-    const repoDriverClient = await getRepoDriverClient();
-    const onChainAccountId = await repoDriverClient.getAccountId(
-      RepoDriverUtils.forgeFromString(forge),
-      `${ownerName}/${repoName}`, // TODO: This would only work for GitHub. Update this when we add support other forges.
-    );
+    const onChainAccountId = await executeRepoDriverReadMethod({
+      functionName: 'calcAccountId',
+      args: [Forge.gitHub, hexlify(toUtf8Bytes(`${ownerName}/${repoName}`)) as OxString], // TODO: Change hard-coded Forge logic to dynamic when other forges are supported.
+    });
 
-    if (onChainAccountId !== accountId) {
+    if (onChainAccountId.toString() !== accountId) {
       throw new Error(
         `The user ID ${accountId} does not match the on-chain user ID ${onChainAccountId} for the repo ${repoName} on ${forge}.`,
       );
@@ -54,7 +100,9 @@ export default class RepoDriverMetadataManager extends MetadataManagerBase<
   }
 
   public buildAccountMetadata(context: {
-    forProject: PickGQLF<ClaimedProject, 'account' | 'source' | 'emoji' | 'color' | 'description'>;
+    forProject: PickGQLF<Project, 'account' | 'source' | 'isVisible'> & {
+      chainData: Pick<ClaimedProjectData, 'avatar' | 'color' | 'description'>;
+    };
     forSplits: LatestVersion<typeof repoDriverAccountMetadataParser>['splits'];
   }): LatestVersion<typeof repoDriverAccountMetadataParser> {
     const { forProject, forSplits } = context;
@@ -71,9 +119,19 @@ export default class RepoDriverMetadataManager extends MetadataManagerBase<
         ownerName: forProject.source.ownerName,
         url: forProject.source.url,
       },
-      emoji: forProject.emoji,
-      color: forProject.color,
-      description: forProject.description ?? undefined,
+      isVisible: forProject.isVisible,
+      avatar:
+        forProject.chainData.avatar.__typename === 'EmojiAvatar'
+          ? {
+              type: 'emoji',
+              emoji: forProject.chainData.avatar.emoji,
+            }
+          : {
+              type: 'image',
+              cid: forProject.chainData.avatar.cid,
+            },
+      color: forProject.chainData.color,
+      description: forProject.chainData.description ?? undefined,
       splits: forSplits,
     };
   }
@@ -112,6 +170,21 @@ export default class RepoDriverMetadataManager extends MetadataManagerBase<
 
     result.splits.dependencies = result.splits.dependencies.map(upgradeSplit);
     result.splits.maintainers = result.splits.maintainers.map(upgradeSplit);
+
+    const newRes = result as LatestVersion<typeof repoDriverAccountMetadataParser>;
+
+    // Upgrade emoji
+
+    if (result.emoji) {
+      newRes.avatar = {
+        type: 'emoji',
+        emoji: result.emoji,
+      };
+
+      delete newRes.emoji;
+    }
+
+    newRes.isVisible = 'isVisible' in result ? result.isVisible : true;
 
     const parsed = repoDriverAccountMetadataParser.parseLatest(result);
 

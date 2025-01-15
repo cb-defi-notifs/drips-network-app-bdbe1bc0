@@ -1,12 +1,12 @@
-import { providers } from 'ethers';
-import { env } from '$env/dynamic/public';
+import getOptionalEnvVar from '$lib/utils/get-optional-env-var/public';
+import { JsonRpcProvider, JsonRpcSigner } from 'ethers';
 
 const NETWORK = {
-  chainId: 5,
-  name: 'goerli',
+  chainId: 11155111,
+  name: 'sepolia',
 };
 
-class MockProvider extends providers.StaticJsonRpcProvider {
+class MockProvider extends JsonRpcProvider {
   address = '0x433220a86126eFe2b8C98a723E73eBAd2D0CbaDc';
 
   setAddress(to: string) {
@@ -22,16 +22,16 @@ class MockProvider extends providers.StaticJsonRpcProvider {
     console.log('UNIMPLEMENTED METHOD', request);
   }
 
-  getSigner(): providers.JsonRpcSigner {
-    const tempProvider = new providers.StaticJsonRpcProvider(
-      {
-        url: `http://${env?.PUBLIC_TESTNET_MOCK_PROVIDER_HOST ?? '127.0.0.1'}:8545`,
-        skipFetchSetup: true,
-      },
+  async getSigner(): Promise<JsonRpcSigner> {
+    const tempProvider = new JsonRpcProvider(
+      `http://${getOptionalEnvVar('PUBLIC_TESTNET_MOCK_PROVIDER_HOST') ?? '127.0.0.1'}:8545`,
       NETWORK,
+      {
+        staticNetwork: true,
+      },
     );
 
-    return tempProvider.getSigner(this.address);
+    return await tempProvider.getSigner(this.address);
   }
 
   isWeb3 = true;
@@ -41,15 +41,15 @@ export default (address: string) => {
   // eslint-disable-next-line no-console
   console.log(
     'Using mock provider',
-    `http://${env?.PUBLIC_TESTNET_MOCK_PROVIDER_HOST ?? '127.0.0.1'}:8545`,
+    `http://${getOptionalEnvVar('PUBLIC_TESTNET_MOCK_PROVIDER_HOST') ?? '127.0.0.1'}:8545`,
   );
 
   const provider = new MockProvider(
-    {
-      url: `http://${env?.PUBLIC_TESTNET_MOCK_PROVIDER_HOST ?? '127.0.0.1'}:8545`,
-      skipFetchSetup: true,
-    },
+    `http://${getOptionalEnvVar('PUBLIC_TESTNET_MOCK_PROVIDER_HOST') ?? '127.0.0.1'}:8545`,
     NETWORK,
+    {
+      staticNetwork: true,
+    },
   );
   provider.setAddress(address);
 

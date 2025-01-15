@@ -1,7 +1,7 @@
 <!-- Adjusted from radicle-design-system's TextInput component -->
 <script lang="ts">
-  import type { TextInputValidationState } from 'radicle-design-system/TextInput';
-  import ExclamationCircle from 'radicle-design-system/icons/ExclamationCircle.svelte';
+  import type { TextInputValidationState } from '$lib/components/text-input/text-input';
+  import ExclamationCircle from '$lib/components/icons/ExclamationCircle.svelte';
   import { onMount } from 'svelte';
 
   export let resizable = false;
@@ -86,7 +86,9 @@
     height: 3rem;
     min-height: 3rem;
     resize: none;
-    transition: background-color 0.3s, box-shadow 0.3s;
+    transition:
+      background-color 0.3s,
+      box-shadow 0.3s;
   }
 
   .resizable {

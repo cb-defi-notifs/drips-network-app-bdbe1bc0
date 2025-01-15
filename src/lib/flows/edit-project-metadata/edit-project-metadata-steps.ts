@@ -8,7 +8,7 @@ import type { EditProjectMetadataFlowFragment } from './__generated__/gql.genera
 
 export const EDIT_PROJECT_METADATA_FLOW_FRAGMENT = gql`
   ${SET_NEW_METADATA_STEP_FRAGMENT}
-  fragment EditProjectMetadataFlow on ClaimedProject {
+  fragment EditProjectMetadataFlow on Project {
     ...SetNewMetadataStep
   }
 `;
@@ -26,8 +26,7 @@ export default (project: EditProjectMetadataFlowFragment) => ({
       component: SuccessStep,
       props: {
         safeAppMode: Boolean(get(walletStore).safe),
-        message:
-          'Your project has successfully been updated. Please note that it may take some time for your dashboard to update.',
+        message: 'Your project has successfully been updated.',
       },
     }),
   ],

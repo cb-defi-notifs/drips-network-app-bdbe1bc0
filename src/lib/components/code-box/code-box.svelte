@@ -1,14 +1,18 @@
 <script lang="ts">
   import getContrastColor from '$lib/utils/get-contrast-text-color';
-  import ArrowBoxUpRight from 'radicle-design-system/icons/ArrowBoxUpRight.svelte';
-  import CheckIcon from 'radicle-design-system/icons/CheckCircle.svelte';
-  import CopyIcon from 'radicle-design-system/icons/Copy.svelte';
+  import ArrowBoxUpRight from '$lib/components/icons/ArrowBoxUpRight.svelte';
+  import CheckIcon from '$lib/components/icons/CheckCircle.svelte';
+  import CopyIcon from '$lib/components/icons/Copy.svelte';
   import Button from '../button/button.svelte';
+  import sanitize from 'sanitize-html';
+  import insertTextAtIndices from '$lib/utils/insert-text-at-indicies';
 
   export let path: string;
   export let code: string;
   export let repoUrl: string;
   export let defaultBranch = 'main';
+  export let highlight: [number | null, number | null] = [null, null];
+  export let editing: boolean = false;
 
   let headerElem: HTMLElement | undefined;
 
@@ -17,6 +21,18 @@
     : undefined;
 
   $: textColor = primaryColor ? getContrastColor(primaryColor) : undefined;
+
+  $: sanitizedCode = sanitize(code, {
+    allowedTags: [],
+    allowedAttributes: {},
+  });
+  $: displayCode = highlight.some((v) => v === null)
+    ? sanitizedCode
+    : insertTextAtIndices(sanitizedCode, {
+        [highlight[0] as number]: '<mark class="typo-text-diff-additive">',
+        [highlight[1] as number]: '</mark>',
+      });
+  $: ctaText = editing ? 'Edit on GitHub' : 'Add to your repo';
 
   let copySuccess = false;
 
@@ -27,12 +43,12 @@
   }
 
   // TODO: add support for Gitlab.
-  $: gitHubProposalUrl = `${repoUrl}/new/${defaultBranch}?filename=FUNDING.json&value=${encodeURIComponent(
-    code,
-  )}`;
+  $: gitHubProposalUrl = editing
+    ? `${repoUrl}/edit/${defaultBranch}/FUNDING.json`
+    : `${repoUrl}/new/${defaultBranch}?filename=FUNDING.json&value=${encodeURIComponent(code)}`;
 </script>
 
-<section class="codebox relative">
+<section class="codebox relative text-left">
   <header class="header typo-text-small-mono" bind:this={headerElem} style:color={textColor}>
     {path}
     <div class="actions">
@@ -47,13 +63,13 @@
   </header>
   <div class="code-wrapper">
     <code class="typo-text-mono">
-      {@html code}
+      {@html displayCode}
     </code>
   </div>
   {#if repoUrl.includes('github')}
     <footer class="absolute bottom-4 right-4">
       <Button variant="primary" icon={ArrowBoxUpRight} href={gitHubProposalUrl} target="_blank">
-        Add to your repo</Button
+        {ctaText}</Button
       >
     </footer>
   {/if}

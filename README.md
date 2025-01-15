@@ -2,8 +2,10 @@
 
 # Drips App
 
+<a href="https://drips.network/app/projects/github/drips-network/app" target="_blank"><img src="https://drips.network/api/embed/project/https%3A%2F%2Fgithub.com%2Fdrips-network%2Fapp/support.png?background=white&style=drips&text=us&stat=dependencies" alt="Support app on drips.network" height="32"></a>
+
 | 🏗️ This app is under active development, and currently available at [drips.network](https://drips.network/). |
-| -------------------------------------------------------------------------------------------------------------------- |
+| ------------------------------------------------------------------------------------------------------------ |
 
 Drips 💧 is a protocol (and app), built on Ethereum, that enables organizations and individuals to directly and publicly provide funding to the free and open source software projects they depend on the most.
 

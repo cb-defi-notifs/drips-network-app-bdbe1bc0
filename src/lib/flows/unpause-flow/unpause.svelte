@@ -1,78 +1,93 @@
+<script lang="ts" context="module">
+  import { gql } from 'graphql-request';
+
+  export const UNPAUSE_FLOW_STREAM_FRAGMENT = gql`
+    fragment UnpauseFlowStream on Stream {
+      id
+      sender {
+        account {
+          accountId
+        }
+      }
+    }
+  `;
+</script>
+
 <script lang="ts">
-  import wallet from '$lib/stores/wallet/wallet.store';
   import { createEventDispatcher, onMount } from 'svelte';
-  import assert from '$lib/utils/assert';
-  import { getAddressDriverClient } from '$lib/utils/get-drips-clients';
-  import type { Stream } from '$lib/stores/streams/types';
-  import streams from '$lib/stores/streams';
-  import type { StepComponentEvents } from '$lib/components/stepper/types';
+  import { makeTransactPayload, type StepComponentEvents } from '$lib/components/stepper/types';
   import expect from '$lib/utils/expect';
-  import mapFilterUndefined from '$lib/utils/map-filter-undefined';
-  import transact, { makeTransactPayload } from '$lib/components/stepper/utils/transact';
+  import type {
+    CheckUserStreamPausedQuery,
+    CheckUserStreamPausedQueryVariables,
+    UnpauseFlowStreamFragment,
+  } from './__generated__/gql.generated';
+  import { buildUnpauseStreamPopulatedTx } from '$lib/utils/streams/streams';
+  import query from '$lib/graphql/dripsQL';
+  import { invalidateAll } from '$lib/stores/fetched-data-cache/invalidate';
+  import filterCurrentChainData from '$lib/utils/filter-current-chain-data';
+  import network from '$lib/stores/wallet/network';
 
   const dispatch = createEventDispatcher<StepComponentEvents>();
 
-  export let stream: Stream;
+  export let stream: UnpauseFlowStreamFragment;
 
   onMount(() => {
-    transact(
-      dispatch,
+    dispatch(
+      'transact',
       makeTransactPayload({
+        headline: 'Unpause stream',
         before: async () => {
-          const { dripsAccountId, address } = $wallet;
-          assert(dripsAccountId && address);
+          const tx = await buildUnpauseStreamPopulatedTx(stream.id);
 
-          const addressDriverClient = await getAddressDriverClient();
-
-          const { tokenAddress } = stream.streamConfig.amountPerSecond;
-
-          const ownAccount = $streams.accounts[dripsAccountId];
-          assert(ownAccount, "App hasnʼt yet fetched user's own account");
-
-          const assetConfig = ownAccount.assetConfigs.find(
-            (ac) => ac.tokenAddress.toLowerCase() === tokenAddress.toLowerCase(),
-          );
-          assert(assetConfig, 'App hasnʼt yet fetched the right asset config');
-
-          const currentReceivers = mapFilterUndefined(assetConfig.streams, (stream) =>
-            stream.paused
-              ? undefined
-              : {
-                  accountId: stream.receiver.accountId,
-                  config: stream.streamConfig.raw,
-                },
-          );
-
-          const newReceivers = [
-            ...currentReceivers,
-            {
-              accountId: stream.receiver.accountId,
-              config: stream.streamConfig.raw,
-            },
-          ];
-
-          const tx = addressDriverClient.setStreams(
-            tokenAddress,
-            currentReceivers,
-            newReceivers,
-            address,
-            0,
-          );
-
-          return { tx };
+          return { tx, accountId: stream.sender.account.accountId };
         },
 
-        transactions: (transactContext) => ({
-          transaction: () => transactContext.tx,
-        }),
+        transactions: ({ tx }) => [
+          {
+            transaction: tx,
+            applyGasBuffer: true,
+            title: 'Unpause stream',
+          },
+        ],
 
-        after: async () => {
+        after: async (_, { accountId }) => {
           await expect(
-            streams.refreshUserAccount,
-            () => streams.getStreamById(stream.id)?.paused === false,
-            5000,
+            () =>
+              query<CheckUserStreamPausedQuery, CheckUserStreamPausedQueryVariables>(
+                gql`
+                  query CheckUserStreamPaused($accountId: ID!, $chains: [SupportedChain!]) {
+                    userById(accountId: $accountId, chains: $chains) {
+                      chainData {
+                        chain
+                        streams {
+                          outgoing {
+                            id
+                            isPaused
+                          }
+                        }
+                      }
+                    }
+                  }
+                `,
+                { accountId, chains: [network.gqlName] },
+              ),
+            (res) => {
+              const chainData = res.userById?.chainData
+                ? filterCurrentChainData(res.userById.chainData)
+                : undefined;
+
+              return (
+                chainData?.streams?.outgoing?.find(
+                  (s) => s.id.toLowerCase() === stream.id.toLowerCase(),
+                )?.isPaused === false
+              );
+            },
+            10000,
             1000,
           );
+
+          await invalidateAll();
         },
       }),
     );

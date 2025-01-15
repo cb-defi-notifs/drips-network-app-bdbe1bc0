@@ -9,7 +9,6 @@ import { expect } from '@playwright/test';
 import fetch from 'node-fetch';
 import configureAppForTest from './helpers/configure-app-for-test';
 import changeAddress from './helpers/change-address';
-import environment from './helpers/environment';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -28,14 +27,10 @@ describe('app', async () => {
     browser = await chromium.launch({ headless: process.env.E2E_HEADLESS === '0' ? false : true });
     page = await browser.newPage();
 
+    page.on('console', (msg) => console.log(msg.text()));
+
     await configureAppForTest(page);
   });
-
-  beforeAll(async () => {
-    await environment.wait();
-
-    console.log('🌳 Environment is up. Running tests...');
-  }, 14400000);
 
   afterAll(async () => {
     await browser.close();
@@ -46,18 +41,18 @@ describe('app', async () => {
 
   describe('streams and balances', () => {
     describe('global nav', () => {
-      it('opens up to streams tab', async () => {
+      it('opens up to explore tab', async () => {
         await page.goto('http://127.0.0.1:3001/app');
 
-        await expect(page).toHaveURL('http://127.0.0.1:3001/app/streams');
+        await expect(page.locator('text=Stats')).toHaveCount(1);
       });
 
-      it('switches to the streams tab', async () => {
-        await page.locator('div[data-testid="sidenav"] a:text("Streams")').click();
+      it('switches to the funds tab', async () => {
+        await page.locator('div[data-testid="sidenav"] a:text("Funds")').click();
       });
     });
 
-    describe('streams page empty state', () => {
+    describe('funds page empty state', () => {
       it('shows streams page empty states', async () => {
         const tokensEmptyState = page.locator('text=No tokens');
         await expect(tokensEmptyState).toHaveCount(1);
@@ -94,7 +89,7 @@ describe('app', async () => {
 
         await page.type(
           'label:has-text("Token contract address*")',
-          '0xefbF81372aBC3723463746a89CEb42080563684C',
+          '0x27aa1eEDF2F775e949f1D01d886400E5a019fe7B',
         );
 
         await page.locator('button', { hasText: 'Add custom token' }).click();
@@ -102,10 +97,13 @@ describe('app', async () => {
       });
 
       it('displays the custom mock erc-20 token', async () => {
-        const testcoin = page.locator('text=Testcoin');
+        // Test token item in the list-select component
+        const testcoin = page.locator(
+          'data-testid=item-0x27aa1eEDF2F775e949f1D01d886400E5a019fe7B',
+        ); //
         await testcoin.click();
 
-        const topUpButton = page.locator('text=Add Testcoin');
+        const topUpButton = page.locator('text=Add Test token');
         await topUpButton.click();
       });
 
@@ -118,11 +116,11 @@ describe('app', async () => {
         await expect(page.locator('text=Approve')).toHaveCount(1);
       });
 
-      it('shows the topped-up amount on the streams page', async () => {
-        await page.locator('text=Got it').click({ timeout: 10000 });
+      it('shows the topped-up amount on the funds page', async () => {
+        await page.locator('text=Got it').click({ timeout: 30000 });
         await page.waitForTimeout(2000);
         await page.reload();
-      }, 10000);
+      }, 50000);
     });
 
     describe('create stream flow', () => {
@@ -130,12 +128,12 @@ describe('app', async () => {
         await page.locator('text=Create stream').click();
 
         await expect(
-          page.locator('text=Stream any ERC-20 token to anyone with an Ethereum address.'),
+          page.locator('text=Stream any ERC-20 token from your Drips account.'),
         ).toHaveCount(1);
       });
 
       it('allows selecting the available outbound TEST balance', async () => {
-        await page.locator('.label:has-text("Testcoin")').click();
+        await page.locator('.label:has-text("Test token")').click();
       });
 
       it('allows submitting the create stream flow', async () => {
@@ -168,7 +166,7 @@ describe('app', async () => {
       });
 
       it('displays the incoming balance', async () => {
-        await expect(page.locator('text=Testcoin')).toHaveCount(1);
+        await expect(page.locator('text=Test token')).toHaveCount(1);
       });
     });
 
@@ -181,12 +179,12 @@ describe('app', async () => {
       });
 
       it('displays the outgoing balance', async () => {
-        await expect(page.locator('text=Testcoin')).toHaveCount(1);
+        await expect(page.locator('text=Test token')).toHaveCount(1);
       });
 
-      it('switches to recipient streams dashboard', async () => {
+      it('switches to recipient funds dashboard', async () => {
         await changeAddress(page, '0x433220a86126eFe2b8C98a723E73eBAd2D0CbaDc');
-        await page.goto('http://127.0.0.1:3001/app/streams');
+        await page.goto('http://127.0.0.1:3001/app/funds');
 
         await page.reload();
 
@@ -201,7 +199,7 @@ describe('app', async () => {
       });
 
       it('displays the incoming balance', async () => {
-        await expect(page.locator('text=Testcoin')).toHaveCount(1);
+        await expect(page.locator('text=Test token')).toHaveCount(1);
       });
     });
 
@@ -226,7 +224,7 @@ describe('app', async () => {
         await page.keyboard.type('Test');
 
         await expect(
-          page.locator('.account-menu-item-wrapper', { hasText: 'Testcoin' }),
+          page.locator('.account-menu-item-wrapper', { hasText: 'Test token' }),
         ).toHaveCount(1);
 
         await page.keyboard.press('Escape');
@@ -251,8 +249,8 @@ describe('app', async () => {
     });
 
     describe('stream detail view', () => {
-      it('opens the stream detail view', async () => {
-        await page.goto('http://127.0.0.1:3001/app/streams');
+      it('opens the funds detail view', async () => {
+        await page.goto('http://127.0.0.1:3001/app/funds');
         await page.locator('text=E2E Test Stream').click();
 
         await expect(page.locator('text=E2E Test Stream')).toHaveCount(1);
@@ -297,14 +295,14 @@ describe('app', async () => {
 
       it('switches back to the user receiving the stream', async () => {
         await changeAddress(page, '0xAa90c43123ACEc193A35D33db5D71011B019779D');
-        await page.goto('http://127.0.0.1:3001/app/streams');
+        await page.goto('http://127.0.0.1:3001/app/funds');
 
         await page.reload();
 
         await expect(page.locator('text=Balances')).toHaveCount(1);
       });
 
-      it('displays the right incoming earned amount on the streams page', async () => {
+      it('displays the right incoming earned amount on the funds page', async () => {
         await expect(page.locator(`text=${streamPausedAtTotalStreamed}`)).toHaveCount(2);
       });
 
@@ -326,14 +324,14 @@ describe('app', async () => {
     describe('delete stream', () => {
       it('switches back to the original user', async () => {
         await changeAddress(page, '0x433220a86126eFe2b8C98a723E73eBAd2D0CbaDc');
-        await page.goto('http://127.0.0.1:3001/app/streams');
+        await page.goto('http://127.0.0.1:3001/app/funds');
 
         await page.reload();
 
         await expect(page.locator('text=Balances')).toHaveCount(1);
       });
 
-      it('displays the right streamed amount on the streams page', async () => {
+      it('displays the right streamed amount on the funds page', async () => {
         await expect(page.locator(`text=${streamPausedAtTotalStreamed}`)).toHaveCount(1);
       });
 
@@ -350,7 +348,7 @@ describe('app', async () => {
         await page.locator('button', { hasText: 'Delete stream' }).click();
         await page.locator('button', { hasText: 'Got it' }).click();
 
-        expect(page.url().toLowerCase()).toBe('http://127.0.0.1:3001/app/streams');
+        expect(page.url().toLowerCase()).toBe('http://127.0.0.1:3001/app/funds');
       }, 20000);
 
       it('shows the streams empty state', async () => {
@@ -364,7 +362,7 @@ describe('app', async () => {
 
       it('switches back to the recipient', async () => {
         await changeAddress(page, '0xAa90c43123ACEc193A35D33db5D71011B019779D');
-        await page.goto('http://127.0.0.1:3001/app/streams');
+        await page.goto('http://127.0.0.1:3001/app/funds');
 
         await page.reload();
 
@@ -383,16 +381,16 @@ describe('app', async () => {
 
     describe('squeezing', () => {
       it('opens the collect flow', async () => {
-        await page.goto('http://127.0.0.1:3001/app/streams');
+        await page.goto('http://127.0.0.1:3001/app/funds');
 
-        await page.locator('text=Testcoin').click();
-        await page.locator('button', { hasText: 'Collect' }).click();
+        await page.locator('text=Test token').click();
+        await page.locator('data-testid=token-page-collect-button').click();
 
         await expect(page.locator('h1', { hasText: 'Collect TEST' })).toHaveCount(1);
       });
 
       it('expands the squeezing section', async () => {
-        await page.locator('label:has-text("Include unsettled stream earnings")').click();
+        await page.locator('label:has-text("Include unsettled stream funds")').click();
 
         await expect(
           page.locator(`data-testid=item-383620263794848526656662033323214000554911775452`),
@@ -404,14 +402,14 @@ describe('app', async () => {
       it('shows the success screen', async () => {
         await expect(
           page.locator(
-            'text=Your TEST earnings have successfully been delivered to your wallet address.',
+            'text=Your TEST funds have successfully been delivered to your wallet address.',
           ),
         ).toBeVisible();
 
         await page.locator('button', { hasText: 'Got it' }).click();
       });
 
-      it('shows an incoming balance of zero for Testcoin after squeezing', async () => {
+      it('shows an incoming balance of zero for Test token after squeezing', async () => {
         await expect(page.locator('data-testid=incoming-balance')).toHaveText('0.00');
       });
     });
@@ -419,10 +417,10 @@ describe('app', async () => {
 
   describe('drip lists', () => {
     describe('create drip list flow', () => {
-      it('opens up to streams tab', async () => {
+      it('opens up to explore tab', async () => {
         await page.goto('http://127.0.0.1:3001/app');
 
-        await expect(page).toHaveURL('http://127.0.0.1:3001/app/streams');
+        await expect(page.locator('text=Stats')).toHaveCount(1);
       });
 
       it('switches to the Drip List tab', async () => {
@@ -433,36 +431,10 @@ describe('app', async () => {
         ).toHaveCount(1);
       });
 
-      it('opens the drip list creation flow', async () => {
+      it('opens the create drip list flow', async () => {
         await page.locator('text=Create Drip List').click();
 
-        await expect(page.locator('text=Create a Drip List')).toHaveCount(1);
-      });
-
-      it('adds items', async () => {
-        const input = page.locator(
-          'input[placeholder="GitHub URL, Ethereum address, or Drip List URL"]',
-        );
-        await expect(input).toHaveCount(1);
-        await input.click();
-
-        await page.keyboard.type('github.com/efstajas/drips-test-repo-10');
-        await page.keyboard.press('Enter');
-
-        await expect(
-          page.locator('data-testid=item-https://github.com/efstajas/drips-test-repo-10'),
-        ).toHaveCount(1);
-
-        await page.keyboard.type('0x433220a86126eFe2b8C98a723E73eBAd2D0CbaDc');
-        await page.keyboard.press('Enter');
-
-        await expect(
-          page.locator('data-testid=item-0x433220a86126eFe2b8C98a723E73eBAd2D0CbaDc'),
-        ).toHaveCount(1);
-      });
-
-      it('assigns equal percentages', async () => {
-        await page.locator('button', { hasText: 'Split evenly' }).click();
+        await expect(page.locator('h1:has-text("Create a Drip List")')).toHaveCount(1);
       });
 
       it('renames the drip list', async () => {
@@ -475,20 +447,57 @@ describe('app', async () => {
         await page.locator('label:has-text("Description")').fill('This is my list description.');
       });
 
-      it('advances the flow', async () => {
-        await page.locator('button', { hasText: 'Continue' }).click();
+      it('selects choose yourself option', async () => {
+        await page.locator('text=Choose by yourself').click();
+        await page.locator('text=Continue').click();
+
+        await expect(page.locator('h1:has-text("Create a Drip List")')).toHaveCount(1);
       });
 
-      it('connects the wallet and continues', async () => {
-        await page.waitForTimeout(1000); // Wait for previous step to be unmounted
+      it('adds items', async () => {
+        console.log(1);
 
-        await expect(page.locator('text=Connect your wallet')).toHaveCount(1);
+        const input = page.locator(
+          'input[placeholder="GitHub URL, ETH address, or Drip List URL"]',
+        );
+        await expect(input).toHaveCount(1);
+        await input.click();
+
+        console.log(2);
+
+        await page.keyboard.type('github.com/efstajas/drips-test-repo-10');
+        console.log(3);
+        await page.keyboard.press('Enter');
+        console.log(4);
+
+        await expect(
+          page.locator(
+            'data-testid=item-80921553623925136102837120782793736893291544351678576578072673071408',
+          ),
+        ).toHaveCount(1);
+
+        console.log(5);
+
+        await page.keyboard.type('0x433220a86126eFe2b8C98a723E73eBAd2D0CbaDc');
+
+        console.log(6);
+        await page.keyboard.press('Enter');
+
+        console.log(7);
+
+        await expect(
+          page.locator('data-testid=item-383620263794848526656662033323214000554911775452'),
+        ).toHaveCount(1);
+
+        console.log(8);
+      });
+
+      it('advances the flow', async () => {
         await page.locator('button', { hasText: 'Continue' }).click();
       });
 
       it('selects the no support option', async () => {
         await page.locator('button', { hasText: 'Support later' }).click();
-        await page.locator('button', { hasText: 'Continue' }).click();
       });
 
       it('opens the review step', async () => {
@@ -508,7 +517,7 @@ describe('app', async () => {
       });
 
       it('selects the test token to stream', async () => {
-        await page.locator('data-testid=item-0xefbF81372aBC3723463746a89CEb42080563684C').click();
+        await page.locator('data-testid=item-0x27aa1eEDF2F775e949f1D01d886400E5a019fe7B').click();
       });
 
       it('enters a monthly stream rate', async () => {
@@ -528,8 +537,8 @@ describe('app', async () => {
       it('creates the drip list', async () => {
         await page.locator('button', { hasText: 'Confirm in wallet' }).click();
 
-        await expect(page.locator('text=Congratulations!')).toHaveCount(1);
-      }, 10000);
+        await expect(page.locator('text=Congratulations!')).toHaveCount(1, { timeout: 20000 });
+      }, 30000);
     });
 
     describe('edit drip list', () => {
@@ -547,14 +556,14 @@ describe('app', async () => {
       });
 
       it('removes an item', async () => {
-        await page.getByTestId('remove-0x433220a86126eFe2b8C98a723E73eBAd2D0CbaDc').click();
+        await page.getByTestId('remove-383620263794848526656662033323214000554911775452').click();
 
         await expect(page.locator('text=50% split')).toHaveCount(1);
       });
 
       it('adds a new item', async () => {
         await page
-          .locator('input[placeholder="GitHub URL, Ethereum address, or Drip List URL"]')
+          .locator('input[placeholder="GitHub URL, ETH address, or Drip List URL"]')
           .click();
 
         await page.keyboard.type('github.com/efstajas/drips-test-repo-11');
@@ -580,7 +589,7 @@ describe('app', async () => {
       });
 
       it('advances the flow', async () => {
-        await page.locator('button', { hasText: 'Confirm changes in your wallet' }).click();
+        await page.locator('button', { hasText: 'Confirm changes' }).click();
         await page.locator('button', { hasText: 'Got it' }).click();
       });
 
@@ -595,6 +604,8 @@ describe('app', async () => {
         await expect(page.locator('text=0x43')).toHaveCount(0);
       }, 10000);
     });
+
+    describe.todo('makes a one-time donation');
 
     describe.todo('create another drip list');
     describe.todo('displays drip lists on profile');

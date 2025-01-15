@@ -1,22 +1,49 @@
 import MetadataManagerBase from './MetadataManagerBase';
 import { nftDriverAccountMetadataParser } from './schemas';
-import type { NFTDriverClient } from 'radicle-drips';
-import type { AnyVersion, LatestVersion } from '@efstajas/versioned-parser/lib/types';
+import type { AnyVersion, LatestVersion } from '@efstajas/versioned-parser';
+import query from '$lib/graphql/dripsQL';
+import { gql } from 'graphql-request';
+import type {
+  LatestDripListMetadataHashQuery,
+  LatestDripListMetadataHashQueryVariables,
+} from './__generated__/gql.generated';
+import type { executeNftDriverWriteMethod } from '../sdk/nft-driver/nft-driver';
+import network from '$lib/stores/wallet/network';
 
 export default class NftDriverMetadataManager extends MetadataManagerBase<
   typeof nftDriverAccountMetadataParser
 > {
-  constructor(nftDriverClient?: NFTDriverClient) {
-    super(nftDriverAccountMetadataParser, nftDriverClient?.emitAccountMetadata);
+  constructor(nftDriver?: typeof executeNftDriverWriteMethod) {
+    super(nftDriverAccountMetadataParser, nftDriver);
+  }
+
+  public async fetchMetadataHashByAccountId(accountId: string): Promise<string | null> {
+    const res = await query<
+      LatestDripListMetadataHashQuery,
+      LatestDripListMetadataHashQueryVariables
+    >(
+      gql`
+        query LatestDripListMetadataHash($accountId: ID!, $chain: SupportedChain!) {
+          dripList(id: $accountId, chain: $chain) {
+            latestMetadataIpfsHash
+          }
+        }
+      `,
+      { accountId, chain: network.gqlName },
+    );
+
+    return res.dripList?.latestMetadataIpfsHash ?? null;
   }
 
   public buildAccountMetadata(context: {
     forAccountId: string;
     projects: LatestVersion<typeof nftDriverAccountMetadataParser>['projects'];
+    isVisible: boolean;
     name?: string;
     description?: string;
+    latestVotingRoundId?: string;
   }): LatestVersion<typeof nftDriverAccountMetadataParser> {
-    const { forAccountId, projects, name, description } = context;
+    const { forAccountId, projects, name, description, latestVotingRoundId, isVisible } = context;
 
     return {
       driver: 'nft',
@@ -28,6 +55,8 @@ export default class NftDriverMetadataManager extends MetadataManagerBase<
       projects,
       name,
       description,
+      latestVotingRoundId,
+      isVisible,
     };
   }
 
@@ -56,7 +85,11 @@ export default class NftDriverMetadataManager extends MetadataManagerBase<
 
     result.projects = result.projects.map(upgradeSplit);
 
-    const parsed = nftDriverAccountMetadataParser.parseLatest(result);
+    const newRes = result as LatestVersion<typeof nftDriverAccountMetadataParser>;
+
+    newRes.isVisible = 'isVisible' in result ? result.isVisible : true;
+
+    const parsed = nftDriverAccountMetadataParser.parseLatest(newRes);
 
     return parsed;
   }

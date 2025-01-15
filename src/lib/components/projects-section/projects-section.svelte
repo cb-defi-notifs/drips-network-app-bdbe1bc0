@@ -1,58 +1,45 @@
+<script lang="ts" context="module">
+  export const PROJECTS_SECTION_PROJECT_FRAGMENT = gql`
+    ${PROJECT_CARD_FRAGMENT}
+    fragment ProjectsSectionProject on Project {
+      ...ProjectCard
+    }
+  `;
+</script>
+
 <script lang="ts">
   import PrimaryColorThemer from '../primary-color-themer/primary-color-themer.svelte';
   import ProjectCard, { PROJECT_CARD_FRAGMENT } from '../project-card/project-card.svelte';
-  import assert from '$lib/utils/assert';
-  import Plus from 'radicle-design-system/icons/Plus.svelte';
-  import Box from 'radicle-design-system/icons/Box.svelte';
-  import walletStore from '$lib/stores/wallet/wallet.store';
-  import { goto } from '$app/navigation';
+  import Box from '$lib/components/icons/Box.svelte';
   import Section from '../section/section.svelte';
-  import query from '$lib/graphql/dripsQL';
   import { gql } from 'graphql-request';
-  import type { ProjectsQuery, ProjectsQueryVariables } from './__generated__/gql.generated';
+  import type { ProjectsSectionProjectFragment } from './__generated__/gql.generated';
   import isClaimed from '$lib/utils/project/is-claimed';
+  import ClaimProjectStepper from '$lib/flows/claim-project-flow/claim-project-stepper.svelte';
+  import Plus from '../icons/Plus.svelte';
+  import modal from '$lib/stores/modal';
+  import filterCurrentChainData from '$lib/utils/filter-current-chain-data';
+  import VisibilityToggle from '../visibility-toggle/visibility-toggle.svelte';
+  import checkIsUser from '$lib/utils/check-is-user';
+  import walletStore from '$lib/stores/wallet/wallet.store';
 
-  export let address: string | undefined;
+  export let projects: ProjectsSectionProjectFragment[];
+  export let withClaimProjectButton = false;
+  export let showVisibilityToggle = false;
 
-  let projects: ProjectsQuery['projects'] | undefined;
   let error = false;
-  let loaded = false;
 
   export let collapsed = false;
   export let collapsable = false;
 
-  async function updateProjects() {
-    try {
-      assert(address);
+  let showHidden: boolean = false;
+  $: hiddenProjectsCount = projects.filter((p) => !p.isVisible).length ?? 0;
 
-      const getProjectsQuery = gql`
-        ${PROJECT_CARD_FRAGMENT}
-        query Projects($where: ProjectWhereInput) {
-          projects(where: $where) {
-            ...ProjectCard
-          }
-        }
-      `;
+  $: visibleProjects = projects.filter((p) => p.isVisible);
 
-      const response = await query<ProjectsQuery, ProjectsQueryVariables>(getProjectsQuery, {
-        where: {
-          ownerAddress: address,
-        },
-      });
-      projects = response.projects;
+  $: hiddenProjects = showHidden ? projects.filter((p) => !p.isVisible) : [];
 
-      loaded = true;
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
-      loaded = true;
-      error = true;
-    }
-  }
-
-  $: address && updateProjects();
-
-  $: isSelf = address && address.toLowerCase() === $walletStore.address?.toLowerCase();
+  $: isOwner = $walletStore.connected && checkIsUser(projects[0]?.chainData[0]?.owner?.accountId);
 </script>
 
 <Section
@@ -61,43 +48,59 @@
   header={{
     icon: Box,
     label: 'Projects',
-    actions: isSelf
+    actions: withClaimProjectButton
       ? [
           {
-            // TODO: (FIX) clicking this button after completing the claim project flow freezes the UI (in all browsers). It shouldnʼt. 😊
-            handler: () => goto(`/app/claim-project`),
             label: 'Claim project',
             icon: Plus,
-            variant: 'primary',
+            handler: () => modal.show(ClaimProjectStepper, undefined, { skipWalletConnect: true }),
           },
         ]
       : [],
   }}
   skeleton={{
     horizontalScroll: false,
-    loaded,
-    empty: projects?.length === 0,
+    loaded: true,
+    empty: showVisibilityToggle ? projects.length === 0 : visibleProjects.length === 0,
     error,
     emptyStateEmoji: '🫙',
     emptyStateHeadline: 'No claimed projects',
-    emptyStateText: isSelf
+    emptyStateText: withClaimProjectButton
       ? 'If you develop an open-source project, click "Claim project" to get started.'
       : 'This user hasnʼt claimed any software projects yet.',
   }}
 >
-  {#if projects}
+  {#if visibleProjects}
     <div class="projects">
-      {#each projects as project}
-        {#if isClaimed(project)}
+      {#each visibleProjects as project}
+        {@const projectChainData = filterCurrentChainData(project.chainData)}
+        {#if isClaimed(projectChainData)}
           <div>
-            <PrimaryColorThemer colorHex={project.color}>
-              <ProjectCard {project} />
+            <PrimaryColorThemer colorHex={projectChainData.color}>
+              <ProjectCard {project} isHidden={!project.isVisible} />
             </PrimaryColorThemer>
           </div>
         {/if}
       {/each}
     </div>
   {/if}
+
+  {#if isOwner && showVisibilityToggle}
+    <VisibilityToggle bind:showHidden hiddenItemsCount={hiddenProjectsCount} />
+  {/if}
+
+  <div class="projects">
+    {#each hiddenProjects as project}
+      {@const projectChainData = filterCurrentChainData(project.chainData)}
+      {#if isClaimed(projectChainData)}
+        <div>
+          <PrimaryColorThemer colorHex={projectChainData.color}>
+            <ProjectCard {project} isHidden={!project.isVisible} />
+          </PrimaryColorThemer>
+        </div>
+      {/if}
+    {/each}
+  </div>
 </Section>
 
 <style>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import Button from '$lib/components/button/button.svelte';
-  import WalletIcon from 'radicle-design-system/icons/Wallet.svelte';
+  import WalletIcon from '$lib/components/icons/Wallet.svelte';
   import wallet from '$lib/stores/wallet/wallet.store';
   import Flyout from '../flyout/flyout.svelte';
   import IdentityBadge from '../identity-badge/identity-badge.svelte';
@@ -15,11 +15,6 @@
 </script>
 
 <div class="wrapper">
-  {#if $wallet.network.chainId !== 1}
-    <div class="network-badge">
-      <p>{$wallet.network.name}</p>
-    </div>
-  {/if}
   {#if $wallet.connected}
     <div class="desktop-only">
       <Flyout>
@@ -42,6 +37,8 @@
     </div>
     <div
       class="mobile-only"
+      role="button"
+      tabindex="0"
       on:click={() => cupertinoPaneStore.openSheet(AccountMenu, undefined)}
       on:keydown={() => cupertinoPaneStore.openSheet(AccountMenu, undefined)}
     >
@@ -68,28 +65,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 0rem;
+    gap: 0.5rem;
   }
 
   .trigger {
     display: flex;
-  }
-
-  .network-badge {
-    height: 2rem;
-    padding: 0 8px;
-    display: flex;
-    align-content: center;
-    justify-content: center;
-    text-transform: capitalize;
-    background-color: var(--color-primary-level-1);
-    border-radius: 1rem 0 1rem 1rem;
-    color: var(--color-primary-level-6);
-    margin-right: 0.5rem;
-  }
-
-  .network-badge p {
-    line-height: 2rem;
   }
 
   .trigger > .safe-logo {

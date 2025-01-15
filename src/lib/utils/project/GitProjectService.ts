@@ -1,45 +1,39 @@
-import {
-  AddressDriverClient,
-  type RepoDriverClient,
-  RepoDriverTxFactory,
-  Utils,
-  type SplitsReceiverStruct,
-  DripsTxFactory,
-} from 'radicle-drips';
-import {
-  getAddressDriverClient,
-  getDripsTxFactory,
-  getRepoDriverClient,
-  getRepoDriverTxFactory,
-  getSubgraphClient,
-} from '../get-drips-clients';
 import RepoDriverMetadataManager from '../metadata/RepoDriverMetadataManager';
-import type { Address } from '../common-types';
 import MetadataManagerBase from '../metadata/MetadataManagerBase';
-import { isAddress } from 'ethers/lib/utils';
-import type { State } from '../../../routes/app/(flows)/claim-project/claim-project-flow';
-import { BigNumber, type PopulatedTransaction } from 'ethers';
+import type { State } from '$lib/flows/claim-project-flow/claim-project-flow';
 import { get } from 'svelte/store';
 import wallet from '$lib/stores/wallet/wallet.store';
 import assert from '$lib/utils/assert';
-import { isValidGitUrl } from '../is-valid-git-url';
-import type { ListEditorConfig } from '$lib/components/drip-list-members-editor/drip-list-members-editor.svelte';
-import type { LatestVersion } from '@efstajas/versioned-parser/lib/types';
+import type { LatestVersion } from '@efstajas/versioned-parser';
 import type { repoDriverAccountMetadataParser } from '../metadata/schemas';
 import { Driver, Forge } from '$lib/graphql/__generated__/base-types';
 import GitHub from '../github/GitHub';
 import { Octokit } from '@octokit/rest';
+import type { Items, Weights } from '$lib/components/list-editor/types';
+import { hexlify, toBigInt, toUtf8Bytes } from 'ethers';
+import type { OxString } from '../sdk/sdk-types';
+import {
+  populateRepoDriverWriteTx,
+  executeRepoDriverReadMethod,
+} from '../sdk/repo-driver/repo-driver';
+import { formatSplitReceivers } from '../sdk/utils/format-split-receivers';
+import type { ContractTransaction } from 'ethers';
+import { populateDripsWriteTx } from '../sdk/drips/drips';
+import keyValueToMetatada from '../sdk/utils/key-value-to-metadata';
+import filterCurrentChainData from '../filter-current-chain-data';
+import unreachable from '../unreachable';
+import network from '$lib/stores/wallet/network';
+
+interface ListEditorConfig {
+  items: Items;
+  weights: Weights;
+}
 
 export default class GitProjectService {
   private _github!: GitHub;
-  private _dripsTxFactory!: DripsTxFactory;
-  private _repoDriverClient!: RepoDriverClient;
-  private _repoDriverTxFactory!: RepoDriverTxFactory;
-  private _addressDriverClient!: AddressDriverClient;
-  private readonly _dripsSubgraphClient = getSubgraphClient();
   private readonly _repoDriverMetadataManager = new RepoDriverMetadataManager();
+  private _connectedAddress: string | undefined;
 
-  // eslint-disable-next-line @typescript-eslint/no-empty-function
   private constructor() {}
 
   public static async new(): Promise<GitProjectService> {
@@ -48,16 +42,12 @@ export default class GitProjectService {
     const octokit = new Octokit();
     gitProjectService._github = new GitHub(octokit);
 
-    gitProjectService._repoDriverClient = await getRepoDriverClient();
-    gitProjectService._addressDriverClient = await getAddressDriverClient();
-    gitProjectService._dripsTxFactory = await getDripsTxFactory();
-
-    const { connected, signer } = get(wallet);
+    const { connected, signer, address } = get(wallet);
 
     if (connected) {
       assert(signer, 'Signer address is undefined.');
 
-      gitProjectService._repoDriverTxFactory = await getRepoDriverTxFactory();
+      gitProjectService._connectedAddress = address;
     }
 
     return gitProjectService;
@@ -157,9 +147,7 @@ export default class GitProjectService {
     highLevelPercentages: { [slug: string]: number },
     maintainers: ListEditorConfig,
     dependencies: ListEditorConfig,
-  ): Promise<PopulatedTransaction[]> {
-    assert(this._repoDriverTxFactory, `This function requires an active wallet connection.`);
-
+  ): Promise<{ newMetadataHash: string; batch: ContractTransaction[] }> {
     const {
       tx: setSplitsTx,
       dependenciesSplitMetadata,
@@ -174,8 +162,10 @@ export default class GitProjectService {
     const currentMetadata = await this._repoDriverMetadataManager.fetchAccountMetadata(accountId);
     assert(currentMetadata, `The project with user ID ${accountId} does not exist.`);
 
+    const upgraded = this._repoDriverMetadataManager.upgradeAccountMetadata(currentMetadata.data);
+
     const newMetadata = {
-      ...currentMetadata.data,
+      ...upgraded,
       splits: {
         dependencies: dependenciesSplitMetadata,
         maintainers: maintainersSplitsMetadata,
@@ -189,25 +179,28 @@ export default class GitProjectService {
         key: MetadataManagerBase.USER_METADATA_KEY,
         value: ipfsHash,
       },
-    ].map((m) => Utils.Metadata.createFromStrings(m.key, m.value));
+    ].map(keyValueToMetatada);
 
-    const emitAccountMetadataTx = await this._repoDriverTxFactory.emitAccountMetadata(
-      accountId,
-      accountMetadataAsBytes,
-    );
+    const emitAccountMetadataTx = await populateRepoDriverWriteTx({
+      functionName: 'emitAccountMetadata',
+      args: [toBigInt(accountId), accountMetadataAsBytes],
+    });
 
-    return [setSplitsTx, emitAccountMetadataTx];
+    return { batch: [setSplitsTx, emitAccountMetadataTx], newMetadataHash: ipfsHash };
   }
 
-  public async buildBatchTx(context: State): Promise<PopulatedTransaction[]> {
-    assert(this._repoDriverTxFactory, `This function requires an active wallet connection.`);
-
+  public async buildBatchTx(context: State): Promise<ContractTransaction[]> {
     const { forge, username, repoName } = GitProjectService.deconstructUrl(context.gitUrl);
-    const numericForgeValue = forge === Forge.GitHub ? 0 : 1;
-    const accountId = await this._repoDriverClient.getAccountId(
-      numericForgeValue,
-      `${username}/${repoName}`,
-    );
+
+    const accountId = (
+      await executeRepoDriverReadMethod({
+        functionName: 'calcAccountId',
+        args: [
+          forge === Forge.GitHub ? 0 : unreachable(),
+          hexlify(toUtf8Bytes(`${username}/${repoName}`)) as OxString,
+        ], // TODO: Change hard-coded Forge logic to dynamic when other forges are supported.
+      })
+    ).toString();
 
     const {
       tx: setSplitsTx,
@@ -222,14 +215,12 @@ export default class GitProjectService {
     );
 
     const project = {
-      __typename: 'ClaimedProject' as const,
+      __typename: 'Project' as const,
       account: {
         __typename: 'RepoDriverAccount' as const,
         accountId,
         driver: Driver.Repo,
       },
-      color: context.projectColor,
-      emoji: context.projectEmoji,
       source: {
         __typename: 'Source' as const,
         forge: forge,
@@ -237,10 +228,23 @@ export default class GitProjectService {
         repoName: repoName,
         url: context.gitUrl,
       },
+      chainData: {
+        __typename: 'ClaimedProjectData',
+        chain: network.gqlName,
+        color: context.projectColor,
+        avatar:
+          context.avatar.type === 'emoji'
+            ? {
+                __typename: 'EmojiAvatar' as const,
+                emoji: context.avatar.emoji,
+              }
+            : {
+                __typename: 'ImageAvatar' as const,
+                cid: context.avatar.cid,
+              },
+      },
+      isVisible: true,
     };
-
-    project.emoji = context.projectEmoji;
-    project.color = context.projectColor;
 
     const metadata = this._repoDriverMetadataManager.buildAccountMetadata({
       forProject: project,
@@ -257,48 +261,49 @@ export default class GitProjectService {
         key: MetadataManagerBase.USER_METADATA_KEY,
         value: ipfsHash,
       },
-    ].map((m) => Utils.Metadata.createFromStrings(m.key, m.value));
+    ].map(keyValueToMetatada);
 
-    const emitAccountMetadataTx = await this._repoDriverTxFactory.emitAccountMetadata(
-      accountId,
-      accountMetadataAsBytes,
-    );
+    const emitAccountMetadataTx = await populateRepoDriverWriteTx({
+      functionName: 'emitAccountMetadata',
+      args: [toBigInt(accountId), accountMetadataAsBytes],
+    });
 
-    const splitTxs: Promise<PopulatedTransaction>[] = [];
-    context.unclaimedFunds?.map(({ tokenAddress }) => {
+    const projectChainData = context.project?.chainData
+      ? filterCurrentChainData(context.project.chainData)
+      : unreachable();
+
+    const splittableAmounts =
+      'withdrawableBalances' in projectChainData
+        ? projectChainData.withdrawableBalances.filter((wb) => BigInt(wb.splittableAmount) > 0n)
+        : undefined;
+    const collectableAmounts =
+      'withdrawableBalances' in projectChainData
+        ? projectChainData.withdrawableBalances.filter((wb) => BigInt(wb.collectableAmount) > 0n)
+        : undefined;
+
+    const splitTxs: Promise<ContractTransaction>[] = [];
+    splittableAmounts?.forEach(({ tokenAddress }) => {
       splitTxs.push(
-        this._dripsTxFactory.split(accountId, tokenAddress, this._formatSplitReceivers(receivers)),
+        populateDripsWriteTx({
+          functionName: 'split',
+          args: [toBigInt(accountId), tokenAddress as OxString, formatSplitReceivers(receivers)],
+        }),
       );
     });
 
-    return [setSplitsTx, emitAccountMetadataTx, ...(await Promise.all(splitTxs))];
-  }
+    const collectTxs: Promise<ContractTransaction>[] = [];
+    collectableAmounts?.forEach(({ tokenAddress }) => {
+      assert(this._connectedAddress);
 
-  // TODO: Copied from the SDK. Replace this when the SDK makes this function public.
-  private _formatSplitReceivers(receivers: SplitsReceiverStruct[]): SplitsReceiverStruct[] {
-    // Splits receivers must be sorted by user ID, deduplicated, and without weights <= 0.
+      collectTxs.push(
+        populateRepoDriverWriteTx({
+          functionName: 'collect',
+          args: [toBigInt(accountId), tokenAddress as OxString, this._connectedAddress as OxString],
+        }),
+      );
+    });
 
-    const uniqueReceivers = receivers.reduce((unique: SplitsReceiverStruct[], o) => {
-      if (
-        !unique.some(
-          (obj: SplitsReceiverStruct) => obj.accountId === o.accountId && obj.weight === o.weight,
-        )
-      ) {
-        unique.push(o);
-      }
-      return unique;
-    }, []);
-
-    const sortedReceivers = uniqueReceivers.sort((a, b) =>
-      // Sort by user ID.
-      BigNumber.from(a.accountId).gt(BigNumber.from(b.accountId))
-        ? 1
-        : BigNumber.from(a.accountId).lt(BigNumber.from(b.accountId))
-        ? -1
-        : 0,
-    );
-
-    return sortedReceivers;
+    return Promise.all([setSplitsTx, emitAccountMetadataTx, ...splitTxs, ...collectTxs]);
   }
 
   private async _buildSetSplitsTxAndMetadata(
@@ -307,96 +312,104 @@ export default class GitProjectService {
     maintainerListEditorConfig: ListEditorConfig,
     dependencyListEditorConfig: ListEditorConfig,
   ) {
-    const receivers: SplitsReceiverStruct[] = [];
+    let receivers: ((
+      | LatestVersion<typeof repoDriverAccountMetadataParser>['splits']['maintainers'][number]
+      | LatestVersion<typeof repoDriverAccountMetadataParser>['splits']['dependencies'][number]
+    ) & { sublist: 'dependencies' | 'maintainers' })[] = [];
 
-    // Populate dependencies splits and metadata.
-    const dependenciesInput = Object.entries(dependencyListEditorConfig.percentages);
+    for (const [accountId, weight] of Object.entries(dependencyListEditorConfig.weights)) {
+      const item = dependencyListEditorConfig.items[accountId];
 
-    const dependenciesSplitMetadata: LatestVersion<
-      typeof repoDriverAccountMetadataParser
-    >['splits']['dependencies'] = [];
-
-    for (const [itemId, percentage] of dependenciesInput) {
-      const isAddr = isAddress(itemId);
-
-      const weight = Math.floor(
-        (Number(percentage) / 100) * 1000000 * (highLevelPercentages['dependencies'] / 100),
+      const scaledWeight = Math.floor(
+        Math.floor(weight * (highLevelPercentages['dependencies'] / 100)),
       );
 
-      if (weight === 0) continue;
+      if (scaledWeight === 0) continue;
 
-      if (isAddr) {
-        const receiver = {
-          type: 'address' as const,
-          weight,
-          accountId: await this._addressDriverClient.getAccountIdByAddress(itemId as Address),
-        };
+      switch (item.type) {
+        case 'address': {
+          const receiver = {
+            sublist: 'dependencies' as const,
+            type: 'address' as const,
+            weight: scaledWeight,
+            accountId: accountId,
+          };
 
-        dependenciesSplitMetadata.push(receiver);
-        receivers.push(receiver);
-      } else if (isValidGitUrl(itemId)) {
-        const { forge, username, repoName } = GitProjectService.deconstructUrl(itemId);
+          receivers.push(receiver);
+          break;
+        }
+        case 'drip-list': {
+          const receiver = {
+            sublist: 'dependencies' as const,
+            type: 'dripList' as const,
+            weight: scaledWeight,
+            accountId: accountId,
+          };
 
-        const numericForgeValue = forge === Forge.GitHub ? 0 : 1;
+          receivers.push(receiver);
+          break;
+        }
+        case 'project': {
+          const receiver = {
+            sublist: 'dependencies' as const,
+            type: 'repoDriver' as const,
+            weight: scaledWeight,
+            accountId: accountId,
+            source: GitProjectService.populateSource(
+              item.project.source.forge,
+              item.project.source.repoName,
+              item.project.source.ownerName,
+            ),
+          };
 
-        const receiver = {
-          type: 'repoDriver' as const,
-          weight,
-          accountId: await this._repoDriverClient.getAccountId(
-            numericForgeValue,
-            `${username}/${repoName}`,
-          ),
-        };
-
-        dependenciesSplitMetadata.push({
-          ...receiver,
-          source: GitProjectService.populateSource(forge, repoName, username),
-        });
-        receivers.push(receiver);
-      } else {
-        // It's the account ID for another Drip List
-        const receiver = {
-          type: 'dripList' as const,
-          weight,
-          accountId: itemId,
-        };
-
-        dependenciesSplitMetadata.push(receiver);
-        receivers.push(receiver);
+          receivers.push(receiver);
+          break;
+        }
       }
     }
 
-    // Populate maintainers splits and metadata.
-    const maintainersInput = Object.entries(maintainerListEditorConfig.percentages);
-
-    const maintainersSplitsMetadata: LatestVersion<
-      typeof repoDriverAccountMetadataParser
-    >['splits']['maintainers'] = [];
-
-    for (const [address, percentage] of maintainersInput) {
-      const weight = Math.floor(
-        (Number(percentage) / 100) * 1000000 * (highLevelPercentages['maintainers'] / 100),
+    for (const [accountId, weight] of Object.entries(maintainerListEditorConfig.weights)) {
+      const scaledWeight = Math.floor(
+        Math.floor(weight * (highLevelPercentages['maintainers'] / 100)),
       );
 
-      if (weight === 0) continue;
+      if (scaledWeight === 0) continue;
 
       const receiver = {
+        sublist: 'maintainers' as const,
         type: 'address' as const,
-        weight,
-        accountId: await this._addressDriverClient.getAccountIdByAddress(address),
+        weight: scaledWeight,
+        accountId,
       };
 
-      maintainersSplitsMetadata.push(receiver);
       receivers.push(receiver);
     }
 
+    // Adjust weights to ensure no tiny remainder
+    const MAX_WEIGHT = 1000000;
+
+    function adjustWeights<T extends { weight: number }>(input: T[]): T[] {
+      const totalWeight = input.reduce((acc, { weight }) => acc + weight, 0);
+      const remainder = MAX_WEIGHT - totalWeight;
+
+      if (remainder > 0) {
+        input[0].weight += remainder;
+      }
+
+      return input;
+    }
+
+    receivers = adjustWeights(receivers);
+
     return {
-      tx: await this._repoDriverTxFactory.setSplits(
-        accountId,
-        this._formatSplitReceivers(receivers),
-      ),
-      dependenciesSplitMetadata,
-      maintainersSplitsMetadata,
+      tx: await populateRepoDriverWriteTx({
+        functionName: 'setSplits',
+        args: [toBigInt(accountId), formatSplitReceivers(receivers)],
+      }),
+      dependenciesSplitMetadata: receivers.filter((v) => v.sublist === 'dependencies'),
+      maintainersSplitsMetadata: receivers.filter(
+        (v) => v.sublist === 'maintainers',
+      ) as LatestVersion<typeof repoDriverAccountMetadataParser>['splits']['maintainers'],
       receivers,
     };
   }

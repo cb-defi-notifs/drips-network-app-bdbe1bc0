@@ -4,6 +4,7 @@
   export let percentage = 0;
   export let disabled = false;
   export let editable = true;
+  export let emptyIsError = true;
 
   let error = false;
   let empty = false;
@@ -60,7 +61,7 @@
 
   const dispatch = createEventDispatcher<{
     /** Fired when the user blurs the input after selecting or hits enter to confirm. */
-    confirm: never;
+    confirm: void;
   }>();
 
   function handleBlur() {
@@ -83,10 +84,12 @@
   }
 </script>
 
+<!-- svelte-ignore a11y-no-static-element-interactions -->
 <div
   class="percentage-editor typo-text tabular-nums cursor-text"
   class:focus
   class:error
+  class:empty-is-error={emptyIsError}
   class:empty
   class:disabled
   class:editable
@@ -119,7 +122,9 @@
     border-radius: 0.25rem;
     padding: 0 0.125rem;
     box-sizing: border-box;
-    transition: box-shadow 0.2s, color 0.2s;
+    transition:
+      box-shadow 0.2s,
+      color 0.2s;
   }
 
   .percentage-editor.editable {
@@ -139,7 +144,7 @@
   }
 
   .percentage-editor:not(.disabled).error,
-  .percentage-editor:not(.disabled).empty {
+  .percentage-editor:not(.disabled).empty-is-error.empty {
     box-shadow: 0px 0px 0px 2px var(--color-negative);
     color: var(--color-negative);
   }

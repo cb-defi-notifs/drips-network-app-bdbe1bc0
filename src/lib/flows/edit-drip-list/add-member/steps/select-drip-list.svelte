@@ -1,10 +1,10 @@
 <script context="module">
   export const SELECT_DRIP_LIST_STEP_LISTS_FRAGMENT = gql`
     ${DRIP_LIST_BADGE_FRAGMENT}
-    ${EDIT_DRIP_LIST_STEP_SELECTED_DRIP_LIST_FRAGMENT}
+    ${EDIT_DRIP_LIST_FLOW_DRIP_LIST_FRAGMENT}
     fragment SelectDripListStepLists on DripList {
       ...DripListBadge
-      ...EditDripListStepSelectedDripList
+      ...EditDripListFlowDripList
       splits {
         ... on AddressReceiver {
           account {
@@ -27,21 +27,11 @@
 
   export const SELECT_DRIP_LIST_PROJECT_TO_ADD_FRAGMENT = gql`
     fragment SelectDripListProjectToAdd on Project {
-      ... on ClaimedProject {
-        account {
-          accountId
-        }
-        source {
-          url
-        }
+      account {
+        accountId
       }
-      ... on UnclaimedProject {
-        account {
-          accountId
-        }
-        source {
-          url
-        }
+      source {
+        url
       }
     }
   `;
@@ -54,11 +44,13 @@
     }
   `;
 </script>
-  
+
 <script lang="ts">
   import { goto } from '$app/navigation';
   import Button from '$lib/components/button/button.svelte';
-  import DripListBadge, { DRIP_LIST_BADGE_FRAGMENT } from '$lib/components/drip-list-badge/drip-list-badge.svelte';
+  import DripListBadge, {
+    DRIP_LIST_BADGE_FRAGMENT,
+  } from '$lib/components/drip-list-badge/drip-list-badge.svelte';
   import FormField from '$lib/components/form-field/form-field.svelte';
   import ListSelect from '$lib/components/list-select/list-select.svelte';
   import StepHeader from '$lib/components/step-header/step-header.svelte';
@@ -68,26 +60,36 @@
   import buildUrl from '$lib/utils/build-url';
   import unreachable from '$lib/utils/unreachable';
   import { gql } from 'graphql-request';
-  import DripListIcon from 'radicle-design-system/icons/DripList.svelte';
-  import Plus from 'radicle-design-system/icons/Plus.svelte';
+  import DripListIcon from '$lib/components/icons/DripList.svelte';
+  import Plus from '$lib/components/icons/Plus.svelte';
   import { createEventDispatcher } from 'svelte';
   import type { Writable } from 'svelte/store';
-  import type { SelectDripListDripListToAddFragment, SelectDripListProjectToAddFragment, SelectDripListStepListsFragment } from './__generated__/gql.generated';
-  import type { EditDripListStepSelectedDripListFragment } from '../../shared/steps/__generated__/gql.generated';
-  import { EDIT_DRIP_LIST_STEP_SELECTED_DRIP_LIST_FRAGMENT } from '../../shared/steps/edit-drip-list.svelte';
+  import type {
+    SelectDripListDripListToAddFragment,
+    SelectDripListProjectToAddFragment,
+    SelectDripListStepListsFragment,
+  } from './__generated__/gql.generated';
+  import { EDIT_DRIP_LIST_FLOW_DRIP_LIST_FRAGMENT } from '../../edit-members/edit-drip-list-steps';
+  import type { Items, Weights } from '$lib/components/list-editor/types';
+  import { mapSplitReceiversToEditorConfig } from '$lib/components/list-editor/utils/split-receivers-to-list-editor-config';
 
   const dispatch = createEventDispatcher<StepComponentEvents>();
 
   export let dripLists: SelectDripListStepListsFragment[];
 
-  export let selectedDripListState: Writable<{
-    dripList: EditDripListStepSelectedDripListFragment
-      | undefined;
+  export let state: Writable<{
+    listEditorConfig: {
+      items: Items;
+      weights: Weights;
+    };
+    name: string;
+    description: string | undefined;
+    dripListAccountId: string | undefined;
   }>;
 
   export let projectOrDripListToAdd:
     | SelectDripListDripListToAddFragment
-    | SelectDripListProjectToAddFragment
+    | SelectDripListProjectToAddFragment;
 
   $: urlToAdd =
     'source' in projectOrDripListToAdd
@@ -96,7 +98,7 @@
 
   let selected: string[] = [];
 
-  function isAlreadyInList(listSplits: SelectDripListStepListsFragment["splits"]) {
+  function isAlreadyInList(listSplits: SelectDripListStepListsFragment['splits']) {
     const accountIdToAdd = projectOrDripListToAdd.account.accountId;
 
     return listSplits.some((s) => s.account.accountId === accountIdToAdd);
@@ -106,14 +108,14 @@
     const selectedDripList =
       dripLists.find((dl) => dl.account.accountId === selected[0]) ?? unreachable();
 
-    dispatch('await', {
-      message: 'Getting ready…',
-      promise: async () => {
-        $selectedDripListState = {
-          dripList: selectedDripList,
-        };
-      },
-    });
+    $state = {
+      listEditorConfig: mapSplitReceiversToEditorConfig(selectedDripList.splits),
+      name: selectedDripList.name,
+      description: selectedDripList.description || undefined,
+      dripListAccountId: selectedDripList.account.accountId,
+    };
+
+    dispatch('goForward');
   }
 
   $: subjectName =

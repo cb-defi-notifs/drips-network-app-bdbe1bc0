@@ -16,18 +16,17 @@ There are a few environment variables required for the app to function. You can 
 
 The Drips App depends on the custom [Drips GraphQL API](https://github.com/drips-network/graphql-api). You need to set `GQL_URL` to a URL of the API's `graphql` endpoint, and `GQL_ACCESS_TOKEN` for the `Authorization: Bearer` token that should be used.
 
-For most development tasks, you may use our Goerli deployment of the API, hosted at [https://drips-api-goerli-s1.up.railway.app/](https://drips-api-goerli-s1.up.railway.app/). To use this API deployment, set `GQL_URL` to `https://drips-api-goerli-s1.up.railway.app/`, and `GQL_ACCESS_TOKEN` to `1234`. Ensure `PUBLIC_NETWORK` is set to `5`, so that both the app and API are talking to the Goerli testnet.
+For most development tasks, you may use our Sepolia deployment of the API, hosted at [https://drips-api-sepolia-s1.up.railway.app/](https://drips-api-sepolia-s1.up.railway.app/). To use this API deployment, set `GQL_URL` to `https://drips-api-sepolia-s1.up.railway.app/`, and `GQL_ACCESS_TOKEN` to `afdb8b7e-8fa7-4de9-bd95-b650b839e745`. Ensure `PUBLIC_NETWORK` is set to `11155111`, so that both the app and API are talking to the Sepolia testnet.
 
 You can also use the local E2E env to easily spin up a fully-fledged deployment of the Drips GraphQL API, complete with event processing and a local, blank testnet to transact against. To do so, set `GQL_URL` to `http://localhost:8080/graphql`, `GQL_ACCESS_TOKEN` to `afdb8b7e-8fa7-4de9-bd95-b650b839e745`, and `PUBLIC_NETWORK` to `5`. Then, follow the instructions below under "🌐 Run app locally with a local testnet".
 
 ### 🔗 Chain Config
 
-To run the app, youʼll need to configure the `PUBLIC_NETWORK` environment variable. This should be the chainId of the chain you want to run the app for, and can currently be either 1, 5 or 11155111. The app will only allow connecting wallets that are set to this network, and all server-side requests will be made for this network's subgraph.
+To run the app, youʼll need to configure the `PUBLIC_NETWORK` environment variable. This should be the chainId of the chain you want to run the app for, and can currently be either 1 or 11155111. The app will only allow connecting wallets that are set to this network, and all server-side requests will be made for this network's subgraph.
 
 For your convenience, weʼve deployed production mirrors of the app set to allow testnet connections:
 
 ```sh
-https://goerli.drips.network/ # PUBLIC_NETWORK set to 5
 https://sepolia.drips.network/ # PUBLIC_NETWORK set to 11155111
 ```
 
@@ -49,6 +48,18 @@ npm run dev
 # or start the server and open the app in a new browser tab
 npm run dev -- --open
 ```
+
+You can also start the local development server with docker:
+
+```bash
+# build the image
+npm run build:docker
+
+# and then run it
+npm run dev:docker
+```
+
+The docker dev server supports hot-reloading and has the advantage of more closely emulating the deployment environment.
 
 ## 🏗️ Building
 
@@ -72,34 +83,71 @@ With all dependencies installed, simply run:
 npm run test:unit
 ```
 
-### E2E tests
+### Mock Local Environment & E2E Tests
+
+#### Running the mocked local environment
+
+We provide a docker-compose configuration which runs the following services and components locally:
+
+- A Ganache testnet with the [Drips Protocol contracts](https://github.com/drips-network/contracts) pre-deployed
+- [Drips Events Processor](https://github.com/drips-network/events-processor)
+- [Drips GraphQL API](https://github.com/drips-network/graphql-api)
+- [Drips Subgraph](https://github.com/drips-network/subgraph)
+- [Graph Node](https://github.com/graphprotocol/graph-node)
+- [IPFS Kubo Node](https://github.com/ipfs/kubo) (For Graph Node)
+- [Fake Pinata](https://github.com/drips-network/fake-pinata) (Simple local mock of Pinata API)
+- 2 Postgres Databases for Events Processor and Subgraph
+- One Redis instance for the app's GitHub API caching
+
+You can start and stop this environment with one command, and easily connect a local dev instance of the app to it. This allows entirely gasless local development on a testnet the state of which you can reset at will.
+
+To get started, run:
+
+```sh
+  npm run local-env:start
+```
+
+This command starts the local environment and starts logging all component's output to the console. When you run this for the first time, it'll take a while, but Docker will cache all build steps for subsequent usages.
+
+Stop the local environment by running:
+
+```sh
+  npm run local-env:stop
+```
+
+##### Note on service versions
+
+Docker is configured to always build the Drips Event Processor and Drips GraphQL API images from the latest `main` branch commit. When you run the local env, it will automatically check for newer commits and rebuild the images if necessary. If you want to use a different branch of either of these services, you can customize the branch used by specifying environment variables:
+
+```sh
+GQL_API_BRANCH=main EVENTS_PROCESSOR_BRANCH=main
+```
+
+##### Connecting the app to the local mocked env
+
+To start a dev server that has the app talk to the locally-running environment, simply run:
+
+```sh
+npm run dev:local-env
+```
 
 #### Running E2E tests
 
-We're using `docker compose` to run a local test environment, including a `ganache` testnet with deployed Drips contracts (and a mock ERC-20), a local graph node with
+To run the E2E test suite, ensure the local mock environment is down, and then simply run:
 
-To get started, make sure you have Docker installed & running, ensure the app's dependencies are installed via NPM, and execute from the root directory of the app:
-
-```bash
+```sh
 npm run e2e
 ```
 
-This will build a production version of the app, and execute all E2E test suites. Each test suite itself will run `docker compose up` to start the E2E test environment (ipfs node, anvil testnet w/ Drips contracts, and Graph Node w/ Drips subgraph). On first run, youʼll see `Pinging Graph Node…` being logged for an extended amount of time. On subsequent runs, this step will be a lot faster, because much of the E2E Docker environment is being cached.
+This command will start the local mock environment, transfer your local source code of the app into a new container, build the app within it, and run tests.
 
-**Important:** The local testnet is based on a static chain state which is copied into the testnet image from ./src/e2e-tests/docker/testnet/state. When a new version of contracts is released, this state needs to be updated. The subgraph is downloaded at image build time from the latest state of the `drips-subgraph` repo's `v2` branch.
+For debugging tests, it's useful to be able to see what's going on within the Playwright browser. To do so, you can run the tests outside of Docker by simply starting the local mock environment (see "Running the mocked local environment"), and execute tests outside of docker by running `npm run test:e2e`.
+
+In order to make the Playwright browser headful, add `E2E_HEADLESS=0` to your `.env` file.
+
+Please note that data is persisted in the local environment unless you explicitly stop and restart it. You will need to do this in-between test runs, because subsequent tests will fail unless the environment is is its initial state.
 
 #### Writing E2E tests
-
-##### Starting the E2E test environment
-
-To start the E2E environment (local testnet & graph node with deployed Drips contracts and subgraph), register the following Vitest callbacks on your test suites:
-
-```ts
-beforeAll(environment.start, 14400000);
-afterAll(environment.stop);
-```
-
-This will start the Docker environment before the tests run, and shut it down at the end.
 
 ##### Configuring the app for testing
 
@@ -158,6 +206,6 @@ Unfortunately, two major differences in app logic for E2E tests couldnʼt be avo
 
 ## 😱 Advanced
 
-### 🌐 Run app locally with a local testnet
+### Redis cache for GitHub API responses
 
-It's possible to connect the app running locally to the local E2E test environment described above. This allows simple and quick development locally, as all transactions will resolve instantly, and network requests are a lot faster. To do so, run `npm run dev:local-env:start-env` to up the local development environment, then run `dev:local-env:start-app` to start the dev server and connect it to the local services. Once done, run `npm run dev:local-env:stop-env` to stop the local development environment.
+When a project profile is loaded, a project is added to a Splits editor, or a GitHub repo URL is entered into the Project Claim Flow, a request for the repo's details to the GitHub API is made. To avoid excessive requests, the responses can be cached. To enable caching, set the `CACHE_REDIS_CONNECTION_STRING` env variable to a valid Redis connection string.

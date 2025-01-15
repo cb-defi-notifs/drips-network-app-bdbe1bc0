@@ -1,18 +1,23 @@
 <script lang="ts">
   import Button from '$lib/components/button/button.svelte';
   import { createEventDispatcher } from 'svelte';
-  import type { StepComponentEvents } from '$lib/components/stepper/types';
-  import WalletIcon from 'radicle-design-system/icons/Wallet.svelte';
+  import { makeTransactPayload, type StepComponentEvents } from '$lib/components/stepper/types';
+  import WalletIcon from '$lib/components/icons/Wallet.svelte';
   import FormField from '$lib/components/form-field/form-field.svelte';
   import type { Writable } from 'svelte/store';
-  import Splits, { mapSplitsFromListEditorData } from '$lib/components/splits/splits.svelte';
+  import Splits from '$lib/components/splits/splits.svelte';
   import Drip from '$lib/components/illustrations/drip.svelte';
   import StepLayout from '$lib/components/step-layout/step-layout.svelte';
   import type { State } from '../edit-project-splits-steps';
   import StepHeader from '$lib/components/step-header/step-header.svelte';
-  import transact, { makeTransactPayload } from '$lib/components/stepper/utils/transact';
   import GitProjectService from '$lib/utils/project/GitProjectService';
-  import { getCallerClient } from '$lib/utils/get-drips-clients';
+  import ArrowLeft from '$lib/components/icons/ArrowLeft.svelte';
+  import { waitForAccountMetadata } from '$lib/utils/ipfs';
+  import invalidateAccountCache from '$lib/utils/cache/remote/invalidate-account-cache';
+  import { invalidateAll } from '$lib/stores/fetched-data-cache/invalidate';
+  import { populateCallerWriteTx } from '$lib/utils/sdk/caller/caller';
+  import txToCallerCall from '$lib/utils/sdk/utils/tx-to-caller-call';
+  import { mapSplitsFromListEditorData } from '$lib/components/splits/utils';
 
   const dispatch = createEventDispatcher<StepComponentEvents>();
 
@@ -20,38 +25,55 @@
 
   $: dependencyRepresentationalSplits = mapSplitsFromListEditorData(
     $context.dependencySplits.items,
-    $context.dependencySplits.percentages,
+    $context.dependencySplits.weights,
     $context.highLevelPercentages['dependencies'],
   );
 
   $: maintainerRepresentationalSplits = mapSplitsFromListEditorData(
     $context.maintainerSplits.items,
-    $context.maintainerSplits.percentages,
+    $context.maintainerSplits.weights,
     $context.highLevelPercentages['maintainers'],
   );
 
   function submit() {
-    transact(
-      dispatch,
+    dispatch(
+      'transact',
       makeTransactPayload({
+        headline: 'Update project splits',
         before: async () => {
           const gitProjectService = await GitProjectService.new();
 
-          const batch = await gitProjectService.buildUpdateSplitsBatchTx(
+          const { batch, newMetadataHash } = await gitProjectService.buildUpdateSplitsBatchTx(
             $context.projectAccountId,
             $context.highLevelPercentages,
             $context.maintainerSplits,
             $context.dependencySplits,
           );
 
+          const tx = await populateCallerWriteTx({
+            functionName: 'callBatched',
+            args: [batch.map(txToCallerCall)],
+          });
+
           return {
-            callerClient: await getCallerClient(),
-            batch,
+            tx,
+            newMetadataHash,
           };
         },
-        transactions: ({ callerClient, batch }) => ({
-          transaction: () => callerClient.callBatched(batch),
-        }),
+
+        transactions: ({ tx }) => [
+          {
+            transaction: tx,
+            applyGasBuffer: false,
+            title: 'Update project splits',
+          },
+        ],
+
+        after: async (_, { newMetadataHash }) => {
+          await waitForAccountMetadata($context.projectAccountId, newMetadataHash, 'project');
+          await invalidateAccountCache($context.projectAccountId);
+          await invalidateAll();
+        },
       }),
     );
   }
@@ -60,7 +82,7 @@
 <StepLayout>
   <StepHeader
     headline="Review"
-    description="Please double-check your new Project Splits and confirm in your wallet."
+    description="Double-check your new project splits then confirm in your wallet."
   />
   <FormField type="div" title="Split funds with">
     <div class="card">
@@ -71,12 +93,12 @@
         <Splits
           list={[
             {
-              __typename: "SplitGroup",
+              __typename: 'SplitGroup',
               name: 'Dependencies',
               list: dependencyRepresentationalSplits,
             },
             {
-              __typename: "SplitGroup",
+              __typename: 'SplitGroup',
               name: 'Maintainers',
               list: maintainerRepresentationalSplits,
             },
@@ -85,10 +107,11 @@
       </div>
     </div>
   </FormField>
+  <svelte:fragment slot="left-actions">
+    <Button icon={ArrowLeft} on:click={() => dispatch('goBackward')}>Back</Button>
+  </svelte:fragment>
   <svelte:fragment slot="actions">
-    <Button icon={WalletIcon} variant="primary" on:click={submit}
-      >Confirm changes in your wallet</Button
-    >
+    <Button icon={WalletIcon} variant="primary" on:click={submit}>Confirm changes</Button>
   </svelte:fragment>
 </StepLayout>
 

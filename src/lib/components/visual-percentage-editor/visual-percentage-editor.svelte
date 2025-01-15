@@ -215,6 +215,7 @@
             {/if}
           </div>
           {#if index !== Object.keys(percentageElems).length - 1}
+            <!-- svelte-ignore a11y-no-static-element-interactions -->
             <div class="knob" on:mousedown={(e) => startDragging(index, e)}>
               <Knob dragging={draggingIndex === index} />
             </div>
@@ -222,6 +223,7 @@
               <PercentageEditor
                 bind:percentage={percentageInputValues[id]}
                 on:confirm={() => handleConfirmPercentageInput(id)}
+                emptyIsError={false}
               />
             </div>
           {:else}
@@ -230,6 +232,7 @@
                 editable={false}
                 bind:percentage={percentageInputValues[id]}
                 on:confirm={() => handleConfirmPercentageInput(id)}
+                emptyIsError={false}
               />
             </div>
           {/if}
